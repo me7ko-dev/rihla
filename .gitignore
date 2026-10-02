@@ -6,3 +6,6 @@ __pycache__/
 cache/
 shots/
 SESSION_NOTES.md
+
+.vercel
+.env*

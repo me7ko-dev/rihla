@@ -2,7 +2,7 @@
 
 **A travel agent that knows your taste and respects your faith.**
 
-🌍 **Live demo:** https://rihla-travel.vercel.app · 📦 **Code:** https://github.com/me7ko-dev/rihla
+🌍 **Live demo:** https://rihla-agent.vercel.app · 📦 **Code:** https://github.com/me7ko-dev/rihla
 
 Rihla plans city trips for Muslim travellers and families. Tell it where you are going, who is travelling and
 what you love — films, books, authors, music, games, teams — and its agent builds a day-by-day plan:
