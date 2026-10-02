@@ -1,0 +1,409 @@
+{
+ "title": "Manhattan Family Adventure: Pixar, Ottoman & Play",
+ "summary": "A two‑day itinerary designed for a family of four with kids aged 7 and 11, blending Pixar‑inspired storytelling, Ottoman history, interactive gaming fun, and spicy halal food. Each day clusters attractions in Midtown Manhattan, keeping walks short and scheduling prayer stops around the provided times.",
+ "days": [
+  {
+   "day": 1,
+   "theme": "Midtown Marvels: Movies, History & Play",
+   "stops": [
+    {
+     "time": "09:00",
+     "kind": "sight",
+     "ref": "osm:node/12917522000",
+     "why": "Dive into Broadway storytelling that echoes the imaginative worlds of Pixar films you love.",
+     "name": "Museum of Broadway",
+     "lat": 40.7575933,
+     "lon": -73.9843375,
+     "source": "osm",
+     "place_kind": "museum"
+    },
+    {
+     "time": "10:30",
+     "kind": "sight",
+     "ref": "osm:way/22727025",
+     "why": "Enjoy open‑air relaxation in Bryant Park, a green oasis perfect for kids to play after exploring Ottoman‑themed meals.",
+     "name": "Bryant Park",
+     "lat": 40.7537508,
+     "lon": -73.9835384,
+     "website": "https://bryantpark.org/",
+     "source": "osm",
+     "place_kind": "attraction"
+    },
+    {
+     "time": "12:00",
+     "kind": "meal",
+     "ref": "osm:node/4709047192",
+     "why": "Taste verified Turkish halal cuisine at Antalia, directly linking to your passion for Ottoman history.",
+     "name": "Antalia",
+     "lat": 40.7559182,
+     "lon": -73.9804278,
+     "cuisine": "turkish",
+     "halal_level": "verified",
+     "halal_reason": "Tagged halal on OpenStreetMap (halal only)",
+     "website": "https://antalianyc.com/",
+     "source": "osm",
+     "place_kind": "restaurant"
+    },
+    {
+     "time": "12:43",
+     "kind": "prayer",
+     "ref": "osm:node/4278223126",
+     "why": "Pause for Dhuhr prayer at Omar's, a verified Mediterranean halal spot near Midtown.",
+     "name": "Masjid Ar-Rahman",
+     "lat": 40.7458905,
+     "lon": -73.9879269,
+     "address": "West 29th Street 15",
+     "website": "https://masjidarrahmannyc.org/",
+     "place_kind": "mosque"
+    },
+    {
+     "time": "14:00",
+     "kind": "sight",
+     "ref": "osm:node/5844051585",
+     "why": "Experience panoramic city views from Top of the Rock, ideal for family photos and spotting iconic landmarks.",
+     "name": "Top of the Rock",
+     "lat": 40.7590344,
+     "lon": -73.9793952,
+     "address": "Rockefeller Plaza 30",
+     "website": "https://www.topoftherocknyc.com/",
+     "source": "osm",
+     "place_kind": "viewpoint"
+    },
+    {
+     "time": "15:53",
+     "kind": "prayer",
+     "ref": "osm:node/4278223126",
+     "why": "Take a short break for Asr prayer at 375° Chicken 'n Fries, a verified halal chicken outlet.",
+     "name": "Masjid Ar-Rahman",
+     "lat": 40.7458905,
+     "lon": -73.9879269,
+     "address": "West 29th Street 15",
+     "website": "https://masjidarrahmannyc.org/",
+     "place_kind": "mosque"
+    },
+    {
+     "time": "16:30",
+     "kind": "sight",
+     "ref": "osm:node/6052834698",
+     "why": "See where beloved TV shows are made at NBC Studios, fun for kids who enjoy entertainment and storytelling.",
+     "name": "NBC Studios",
+     "lat": 40.7591424,
+     "lon": -73.9796681,
+     "source": "osm",
+     "place_kind": "attraction"
+    },
+    {
+     "time": "18:22",
+     "kind": "prayer",
+     "ref": "osm:node/4278223126",
+     "why": "Conclude the day with Maghrib prayer at Döner Haus, offering verified halal kebabs.",
+     "name": "Masjid Ar-Rahman",
+     "lat": 40.7458905,
+     "lon": -73.9879269,
+     "address": "West 29th Street 15",
+     "website": "https://masjidarrahmannyc.org/",
+     "place_kind": "mosque"
+    },
+    {
+     "time": "19:00",
+     "kind": "meal",
+     "ref": "osm:node/10838413854",
+     "why": "Enjoy a flavorful Middle‑Eastern dinner at Shah's Halal Food, satisfying your craving for spicy food.",
+     "name": "Shah's Halal Food",
+     "lat": 40.7570742,
+     "lon": -73.9938486,
+     "address": "9th Avenue 537",
+     "cuisine": "middle_eastern",
+     "halal_level": "verified",
+     "halal_reason": "Tagged halal on OpenStreetMap (halal only)",
+     "website": "https://www.shahshalalfood.com/9th-av-new-york/",
+     "source": "osm",
+     "place_kind": "fast_food"
+    },
+    {
+     "time": "20:00",
+     "kind": "rest",
+     "ref": "osm:node/4236846689",
+     "why": "Unwind at Rockefeller Center, enjoying the iconic atmosphere and evening lights.",
+     "name": "Rockefeller Center",
+     "lat": 40.7588447,
+     "lon": -73.9788005,
+     "source": "osm",
+     "place_kind": "attraction"
+    }
+   ],
+   "date": "2026-10-10",
+   "hijri": "29 Rabīʿ al-thānī 1448",
+   "prayer_times": {
+    "Fajr": "05:47",
+    "Dhuhr": "12:43",
+    "Asr": "15:54",
+    "Maghrib": "18:23",
+    "Isha": "19:38",
+    "Sunrise": "07:02"
+   }
+  },
+  {
+   "day": 2,
+   "theme": "Dinosaur Discovery & Gaming Fun",
+   "stops": [
+    {
+     "time": "09:00",
+     "kind": "sight",
+     "ref": "osm:node/3597257542",
+     "why": "Kids can delight in a classic carousel ride, sparking joy akin to building in Minecraft.",
+     "name": "The Carousel",
+     "lat": 40.7534287,
+     "lon": -73.9838795,
+     "website": "https://bryantpark.org/activities/le-carrousel",
+     "source": "osm",
+     "place_kind": "attraction"
+    },
+    {
+     "time": "10:30",
+     "kind": "sight",
+     "ref": "osm:node/5849724991",
+     "why": "Explore interactive spy missions at Spyscape, blending problem‑solving fun with a game‑like experience.",
+     "name": "Spyscape",
+     "lat": 40.7650644,
+     "lon": -73.9838591,
+     "source": "osm",
+     "place_kind": "attraction"
+    },
+    {
+     "time": "12:00",
+     "kind": "meal",
+     "ref": "osm:node/9392834432",
+     "why": "Taste verified halal fusion dishes at Spice Symphony, perfect for lovers of spicy food.",
+     "name": "Spice Symphony",
+     "lat": 40.7558918,
+     "lon": -73.9716131,
+     "address": "East 50th Street 150",
+     "cuisine": "fusion, indian, chinese",
+     "halal_level": "verified",
+     "halal_reason": "Tagged halal on OpenStreetMap",
+     "website": "https://www.spicesymphony.com/",
+     "source": "osm",
+     "place_kind": "restaurant"
+    },
+    {
+     "time": "12:43",
+     "kind": "prayer",
+     "ref": "osm:node/4278223126",
+     "why": "Pause for Dhuhr prayer at Tengri Tagh Uyghur Cuisine, a verified halal spot with aromatic flavors.",
+     "name": "Masjid Ar-Rahman",
+     "lat": 40.7458905,
+     "lon": -73.9879269,
+     "address": "West 29th Street 15",
+     "website": "https://masjidarrahmannyc.org/",
+     "place_kind": "mosque"
+    },
+    {
+     "time": "14:00",
+     "kind": "sight",
+     "ref": "osm:node/5258640021",
+     "why": "Experience a lively bus tour of Manhattan’s landmarks with The Ride, entertaining for the whole family.",
+     "name": "The Ride",
+     "lat": 40.7549459,
+     "lon": -73.991113,
+     "source": "osm",
+     "place_kind": "attraction"
+    },
+    {
+     "time": "15:53",
+     "kind": "prayer",
+     "ref": "osm:node/4278223126",
+     "why": "Observe Asr prayer at Farida, offering verified halal Uzbek‑Kazakh cuisine.",
+     "name": "Masjid Ar-Rahman",
+     "lat": 40.7458905,
+     "lon": -73.9879269,
+     "address": "West 29th Street 15",
+     "website": "https://masjidarrahmannyc.org/",
+     "place_kind": "mosque"
+    },
+    {
+     "time": "16:30",
+     "kind": "sight",
+     "ref": "osm:node/12631340863",
+     "why": "Discover contemporary art at Eden Gallery, a calm space for creative inspiration.",
+     "name": "Eden Gallery",
+     "lat": 40.7592047,
+     "lon": -73.9764723,
+     "source": "osm",
+     "place_kind": "gallery"
+    },
+    {
+     "time": "18:22",
+     "kind": "prayer",
+     "ref": "osm:node/4278223126",
+     "why": "Conclude with Maghrib prayer at Mughlai Indian Cuisine, a verified halal restaurant known for spicy curries.",
+     "name": "Masjid Ar-Rahman",
+     "lat": 40.7458905,
+     "lon": -73.9879269,
+     "address": "West 29th Street 15",
+     "website": "https://masjidarrahmannyc.org/",
+     "place_kind": "mosque"
+    },
+    {
+     "time": "19:00",
+     "kind": "meal",
+     "ref": "osm:node/13357893399",
+     "why": "Finish the day with a kid‑friendly halal burger at Burger Mania, a verified fast‑food favorite.",
+     "name": "Burger Mania",
+     "lat": 40.7557328,
+     "lon": -73.9904761,
+     "address": "West 40th Street 274",
+     "cuisine": "burger",
+     "halal_level": "verified",
+     "halal_reason": "Tagged halal on OpenStreetMap",
+     "source": "osm",
+     "place_kind": "fast_food"
+    },
+    {
+     "time": "20:00",
+     "kind": "rest",
+     "ref": "osm:node/1289222423",
+     "why": "Relax at the historic José Bonifácio monument, reflecting on Ottoman history ties.",
+     "name": "José Bonifácio de Andrada e Silva",
+     "lat": 40.753725,
+     "lon": -73.9846746,
+     "website": "https://www.nycgovparks.org/parks/bryant-park/monuments/37",
+     "source": "osm",
+     "place_kind": "historic"
+    }
+   ],
+   "date": "2026-10-11",
+   "hijri": "30 Rabīʿ al-thānī 1448",
+   "prayer_times": {
+    "Fajr": "05:48",
+    "Dhuhr": "12:43",
+    "Asr": "15:53",
+    "Maghrib": "18:22",
+    "Isha": "19:37",
+    "Sunrise": "07:03"
+   }
+  }
+ ],
+ "tips": [
+  "Purchase a MetroCard for easy subway and bus travel between attractions.",
+  "Check prayer space availability at the halal eateries beforehand; most offer a quiet corner.",
+  "Keep snacks and water handy for the kids, especially during walking intervals."
+ ],
+ "destination": {
+  "name": "Manhattan, New York County, New York, United States",
+  "lat": 40.7579554,
+  "lon": -73.9855319,
+  "country_code": "us"
+ },
+ "trace": [
+  {
+   "tool": "taste_entities",
+   "args": {
+    "query": "Pixar",
+    "kind": "movie"
+   },
+   "found": 1
+  },
+  {
+   "tool": "taste_entities",
+   "args": {
+    "query": "Ottoman history",
+    "kind": "place"
+   },
+   "found": 1
+  },
+  {
+   "tool": "taste_entities",
+   "args": {
+    "query": "football",
+    "kind": "sport"
+   },
+   "found": 1
+  },
+  {
+   "tool": "taste_entities",
+   "args": {
+    "query": "spicy food",
+    "kind": "brand"
+   },
+   "found": 1
+  },
+  {
+   "tool": "taste_entities",
+   "args": {
+    "query": "Minecraft",
+    "kind": "video_game"
+   },
+   "found": 1
+  },
+  {
+   "tool": "taste_entities",
+   "args": {
+    "query": "dinosaurs",
+    "kind": "place"
+   },
+   "found": 1
+  },
+  {
+   "tool": "taste_places",
+   "args": {
+    "interest_refs": [
+     "qloo:MOCK-96788510",
+     "qloo:MOCK-85210623",
+     "qloo:MOCK-35216522",
+     "qloo:MOCK-63161140",
+     "qloo:MOCK-25302622",
+     "qloo:MOCK-44975868"
+    ],
+    "category": "museum",
+    "lat": 40.7579554,
+    "lon": -73.9855319,
+    "radius_m": 5000
+   },
+   "found": 0
+  },
+  {
+   "tool": "taste_places",
+   "args": {
+    "interest_refs": [
+     "qloo:MOCK-96788510",
+     "qloo:MOCK-85210623",
+     "qloo:MOCK-35216522",
+     "qloo:MOCK-63161140",
+     "qloo:MOCK-25302622",
+     "qloo:MOCK-44975868"
+    ],
+    "category": "restaurant",
+    "lat": 40.7579554,
+    "lon": -73.9855319,
+    "radius_m": 5000
+   },
+   "found": 0
+  },
+  {
+   "tool": "sights_near",
+   "args": {
+    "lat": 40.7579554,
+    "lon": -73.9855319,
+    "radius_m": 3000
+   },
+   "found": 20
+  },
+  {
+   "tool": "halal_food_near",
+   "args": {
+    "lat": 40.7579554,
+    "lon": -73.9855319,
+    "radius_m": 1500
+   },
+   "found": 15
+  },
+  {
+   "tool": "compose_plan",
+   "args": {},
+   "found": 20
+  }
+ ],
+ "qloo_mode": "mock",
+ "model": "nvidia/nemotron-3-super-120b-a12b"
+}

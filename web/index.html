@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rihla — a travel agent that knows your taste and respects your faith</title>
+<meta name="description" content="Rihla plans trips for Muslim travellers and families: taste-based recommendations from Qloo, halal food you can trust, mosques nearby and a day plan built around prayer times.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230F4C45'/%3E%3Cpath d='M16 5l3 7 7 .5-5.5 4.5 2 7-6.5-4-6.5 4 2-7L6 12.5l7-.5z' fill='%23D9B45A'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri:wght@700&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="pattern" aria-hidden="true"></div>
+  <div class="wrap hero-in">
+    <div class="brand">
+      <div class="logo"><span class="ar" lang="ar">رحلة</span><span class="en">Rihla</span></div>
+      <h1>A travel agent that knows your taste <em>and respects your faith.</em></h1>
+      <p class="lead">Tell Rihla where you are going and what you love. It finds places that match your taste with the Qloo taste graph, halal food you can trust, mosques nearby — and builds each day around the five prayers.</p>
+      <ul class="pills">
+        <li>🎯 Taste-matched places</li><li>🍽️ Halal with honest confidence</li><li>🕌 Prayer-aware schedule</li><li>👨‍👩‍👧 Family friendly, no bars</li>
+      </ul>
+    </div>
+    <form id="form" class="card form" autocomplete="off">
+      <label>Where are you going?
+        <input name="destination" required placeholder="e.g. Manhattan, New York" value="Manhattan, New York">
+      </label>
+      <div class="quick" aria-label="Examples">
+        <button type="button" data-dest="Manhattan, New York">New York</button>
+        <button type="button" data-dest="Sultanahmet, Istanbul">Istanbul</button>
+        <button type="button" data-dest="London">London</button>
+        <button type="button" data-dest="Kuala Lumpur">Kuala Lumpur</button>
+        <button type="button" data-dest="Sofia, Bulgaria">Sofia</button>
+      </div>
+      <div class="row">
+        <label>Days
+          <select name="days"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+        </label>
+        <label>Start
+          <input name="start" type="date">
+        </label>
+        <label>Language
+          <select name="language">
+            <option>English</option><option value="Turkish">Türkçe</option><option value="Arabic">العربية</option>
+            <option value="Bulgarian">Български</option><option value="French">Français</option><option value="Malay">Bahasa Melayu</option>
+          </select>
+        </label>
+      </div>
+      <label>Who is travelling?
+        <input name="travellers" placeholder="e.g. Family of four, kids aged 7 and 11" value="Family of four, kids aged 7 and 11">
+      </label>
+      <label>What do you love?
+        <textarea name="tastes" rows="3" placeholder="Films, books, music, food, sports…">We love Pixar movies, Ottoman history, football and spicy food. The kids are into Minecraft and dinosaurs.</textarea>
+      </label>
+      <button class="go" type="submit"><span>Plan my trip</span></button>
+      <p class="err" id="err" hidden></p>
+    </form>
+  </div>
+</header>
+
+<main class="wrap" id="result" hidden>
+  <section class="sum card" id="sum"></section>
+  <div class="split">
+    <section id="days" class="days"></section>
+    <aside class="mapbox"><div class="daybar" id="daybar"></div><div id="map"></div><p class="legend"><i class="d sight"></i>Sight <i class="d meal"></i>Meal <i class="d prayer"></i>Prayer</p></aside>
+  </div>
+  <details class="card trace" id="trace"><summary>How Rihla planned this</summary><ol></ol></details>
+</main>
+
+<div class="loading" id="loading" hidden>
+  <div class="card">
+    <div class="spin" aria-hidden="true"></div>
+    <h3>Rihla is planning your trip… <span id="elapsed" class="elapsed">0 s</span></h3>
+    <ol class="steps" id="steps" aria-live="polite"></ol>
+    <p class="hint">A new city can take a little longer the first time.</p>
+  </div>
+</div>
+
+<footer class="wrap foot">
+  Taste data: <a href="https://www.qloo.com" target="_blank" rel="noopener">Qloo</a> ·
+  Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> ·
+  Prayer times: <a href="https://aladhan.com" target="_blank" rel="noopener">AlAdhan</a> ·
+  Halal labels show how sure we are — always confirm with the restaurant.
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
