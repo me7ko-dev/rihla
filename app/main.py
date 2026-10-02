@@ -3,8 +3,11 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import re
+import time
+from collections import defaultdict, deque
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -14,6 +17,40 @@ from .config import ROOT
 
 log = logging.getLogger("rihla")
 app = FastAPI(title="Rihla — halal-aware travel agent", docs_url="/api/docs")
+
+
+# The free API keys must never leave the server, not even inside a provider's error message
+_SECRETS = [v for v in (config.QLOO_API_KEY, config.LLM_API_KEY, config.FALLBACK_API_KEY) if v]
+_KEYLIKE = re.compile(r"\b(nvapi-|gsk_|hack_|sk-)[A-Za-z0-9_\-]{6,}")
+
+
+def _clean(text: str) -> str:
+    for v in _SECRETS:
+        text = text.replace(v, "***")
+    return _KEYLIKE.sub("***", text)
+
+
+# Fair use: every plan costs Qloo requests (10,000 a month) and LLM calls, so one visitor cannot use them all up
+PER_IP_HOUR = 6
+PER_DAY = 300
+_by_ip: dict[str, deque] = defaultdict(deque)
+_today: deque = deque()
+
+
+def _allow(request: Request) -> None:
+    now = time.time()
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")).split(",")[0].strip()
+    mine = _by_ip[ip]
+    while mine and now - mine[0] > 3600:
+        mine.popleft()
+    while _today and now - _today[0] > 86400:
+        _today.popleft()
+    if len(mine) >= PER_IP_HOUR:
+        raise HTTPException(429, "You have planned several trips in the last hour — please try again a little later.")
+    if len(_today) >= PER_DAY:
+        raise HTTPException(429, "Rihla has planned many trips today — please come back tomorrow.")
+    mine.append(now)
+    _today.append(now)
 
 
 class PlanRequest(BaseModel):
@@ -26,7 +63,8 @@ class PlanRequest(BaseModel):
 
 
 @app.post("/api/plan")
-async def make_plan(req: PlanRequest):
+async def make_plan(req: PlanRequest, request: Request):
+    _allow(request)
     try:
         return await agent.plan(req.destination, req.days, req.start or dt.date.today() + dt.timedelta(days=7),
                                 req.travellers, req.tastes, req.language)
@@ -34,12 +72,13 @@ async def make_plan(req: PlanRequest):
         raise HTTPException(400, str(e))
     except Exception as e:
         log.exception("plan failed")
-        raise HTTPException(502, f"Planning failed: {str(e)[:200]}")
+        raise HTTPException(502, _clean(f"Planning failed: {str(e)[:200]}"))
 
 
 @app.post("/api/plan/stream")
-async def make_plan_stream(req: PlanRequest):
+async def make_plan_stream(req: PlanRequest, request: Request):
     """Same as /api/plan, but streams what the agent is doing (server-sent events) and ends with the plan."""
+    _allow(request)
     q: asyncio.Queue = asyncio.Queue()
 
     async def run():
@@ -48,10 +87,10 @@ async def make_plan_stream(req: PlanRequest):
                                     req.travellers, req.tastes, req.language, emit=q.put)
             await q.put({"type": "done", "plan": plan})
         except ValueError as e:
-            await q.put({"type": "error", "detail": str(e)})
+            await q.put({"type": "error", "detail": _clean(str(e))})
         except Exception as e:
             log.exception("plan failed")
-            await q.put({"type": "error", "detail": f"Planning failed: {str(e)[:200]}"})
+            await q.put({"type": "error", "detail": _clean(f"Planning failed: {str(e)[:200]}")})
 
     async def events():
         task = asyncio.create_task(run())
