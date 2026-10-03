@@ -136,7 +136,7 @@ function render(plan) {
         var km = distKm(prev, s) * 1.3;
         s._mode = km <= WALK_KM ? 'walk' : 'transit';
         if (km >= 0.15) {
-          var leg = '<a href="' + esc(mapsUrl('google', s, s._mode, prev)) + '" target="_blank" rel="noopener" title="See this leg in Google Maps">';
+          var leg = '<a href="' + esc(mapsUrl(IS_APPLE ? 'apple' : 'google', s, s._mode, prev)) + '" target="_blank" rel="noopener" title="See this leg in ' + (IS_APPLE ? 'Apple Maps' : 'Google Maps') + '">';
           if (km <= WALK_KM) { walk += km; list += '<li class="leg">' + leg + '🚶 ' + Math.max(2, Math.round(km / 0.075)) + ' min walk</a></li>'; }
           else { rides++; list += '<li class="leg">' + leg + '🚇 ' + km.toFixed(1) + ' km · metro or taxi</a></li>'; }
         }
