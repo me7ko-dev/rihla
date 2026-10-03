@@ -2,7 +2,8 @@
 
 **A travel agent that knows your taste and respects your faith.**
 
-🌍 **Live demo:** https://rihla-agent.vercel.app · 📦 **Code:** https://github.com/me7ko-dev/rihla
+🌍 **Live demo:** https://rihla-agent.vercel.app · 📦 **Code:** https://github.com/me7ko-dev/rihla ·
+[![tests](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml/badge.svg)](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml)
 
 ![A two-day family plan for London: Natural History Museum "known for dinosaurs", halal meals, prayers at the nearest mosque](docs/rihla-plan.png)
 
@@ -41,6 +42,19 @@ OpenStreetMap adds halal-tagged restaurants and more mosques; AlAdhan gives pray
 
 ## The agent
 
+```mermaid
+flowchart LR
+    U["Traveller: where, who, what they love"] --> A["LLM agent<br/>NVIDIA Nemotron 3 Super"]
+    A -- "taste_entities" --> Q1["Qloo /search<br/>names → taste signals"]
+    A -- "taste_places" --> Q2["Qloo /v2/insights<br/>signals + audiences Islam, families"]
+    A -- "halal_food_near" --> H["Qloo halal restaurants<br/>+ OpenStreetMap halal tags"]
+    A -- "mosques_near" --> M["Qloo + OpenStreetMap mosques"]
+    U --> P["AlAdhan prayer times"]
+    Q1 & Q2 & H & M & P --> W["Plan written by the agent"]
+    W --> C["Code checks: real places only, opening hours,<br/>prayers at the exact time and nearest mosque,<br/>Jumu'ah, short routes, meals nearby, no repeats"]
+    C --> R["Day-by-day plan on a map"]
+```
+
 An LLM agent (NVIDIA Nemotron 3 Super, fallback Groq) researches with tools, then writes the itinerary:
 
 1. `taste_entities` — turns everything you named into Qloo entities (only names you actually wrote; topics such as
@@ -60,6 +74,15 @@ uvicorn app.main:app --port 8090
 ```
 
 Open http://localhost:8090. Qloo responses are cached for a week (the hackathon key allows 10,000 requests a month).
+
+Tests (offline, no keys needed): `pip install pytest && pytest -q`
+
+## Reliability
+- If the language model is unavailable, Rihla runs the same tools itself and assembles the plan from the same Qloo
+  results, so a visitor never sees an empty error.
+- If OpenStreetMap's geocoder refuses the server, the destination is found with Qloo instead.
+- API keys stay on the server (never in the browser, never in error messages); a fair-use limit protects the
+  monthly Qloo quota.
 
 ## License
 
