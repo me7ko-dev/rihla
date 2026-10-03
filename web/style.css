@@ -137,6 +137,21 @@ main{padding:28px 20px 10px}
 .badge.jumuah{background:var(--prayer);color:#fff}
 .stops .leg{list-style:none;font-size:12px;color:var(--soft);padding:0 0 0 78px;margin:-4px 0;position:relative}
 .day .move{font-size:12.5px;color:var(--soft);margin:6px 0 0}
+/* directions: one tap opens Apple Maps or Google Maps */
+.nav{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.navlbl{font-size:12px;color:var(--soft);margin-right:2px}
+.navbtn,.leaflet-container a.navbtn{display:inline-flex;align-items:center;min-height:32px;padding:4px 12px;border-radius:10px;border:1px solid var(--teal);background:#fff;color:var(--teal);font:600 13px/1.2 Inter,system-ui,sans-serif;text-decoration:none}
+.navbtn:hover,.leaflet-container a.navbtn:hover{background:var(--teal);color:#fff}
+@media (pointer:coarse){.navbtn,.leaflet-container a.navbtn{min-height:44px;padding:8px 14px}}
+.stop>.nav{grid-column:3;margin-top:-4px}
+.leaflet-popup-content .nav{margin-top:8px}
+/* phones: the leg line above already says walk or ride, so the two buttons share the row */
+@media (max-width:520px){
+  .navlbl{display:none}
+  .nav .navbtn,.leaflet-container .nav a.navbtn{flex:1 1 0;justify-content:center;padding:8px 10px}
+}
+.stops .leg a{color:inherit;text-decoration:underline dotted;text-underline-offset:3px}
+.stops .leg a:hover{color:var(--teal-2)}
 .how{padding:30px 20px 6px}
 .how h2{font:600 26px/1.2 Fraunces,Georgia,serif;margin:0 0 14px}
 .how-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
