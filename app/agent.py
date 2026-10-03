@@ -334,12 +334,32 @@ WORKS = {"urn:entity:movie", "urn:entity:tv_show", "urn:entity:book", "urn:entit
          "urn:entity:podcast"}
 
 
+def _variants(q: str) -> list[str]:
+    """Shorter forms to try when the full text finds nothing: "Orhan Pamuk'un romanları" -> "Orhan Pamuk" (Turkish and
+    other languages attach endings with an apostrophe), then the first two words."""
+    out = [q]
+    bare = " ".join(re.sub(r"['’][^\s]*", "", q).split())
+    if bare and bare not in out:
+        out.append(bare)
+    words = bare.split()
+    if len(words) > 2:
+        out.append(" ".join(words[:2]))
+    return out
+
+
 async def _lookup(trip: Trip, query: str, kind: str | None) -> tuple[list, str]:
+    for q in _variants(" ".join(GENERIC_WORDS.sub(" ", query).split()) or query):
+        found, note = await _lookup_one(trip, q, query, kind)
+        if found:
+            return found, note
+    return [], "no match"
+
+
+async def _lookup_one(trip: Trip, q: str, query: str, kind: str | None) -> tuple[list, str]:
     """One favourite -> Qloo entities; the best match becomes one of the traveller's taste signals.
     Score = how well the name matches + the requested type + Qloo popularity, so "Harry Potter" (a book)
     beats the unknown TV show of the same name, and "Marvel movies" never becomes a singer called Märvel."""
     kind = kind if kind in qloo.TYPES else None
-    q = " ".join(GENERIC_WORDS.sub(" ", query).split()) or query
     key, want = _key(q), qloo.TYPES.get(kind or "", "")
     res = await asyncio.gather(qloo.search(q, None, take=8), qloo.search(q, kind, take=5) if kind else asyncio.sleep(0, []),
                                return_exceptions=True)

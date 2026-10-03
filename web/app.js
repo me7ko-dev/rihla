@@ -86,10 +86,11 @@ form.addEventListener('submit', function (e) {
 
 function render(plan) {
   $('#result').hidden = false;
+  $('#how').hidden = true;
   var n = 0, stops = 0, meals = 0, verified = 0;
   plan.days.forEach(function (d) { d.stops.forEach(function (s) { stops++; if (s.kind === 'meal') { meals++; if (s.halal_level === 'verified') verified++; } }); });
   $('#sum').innerHTML = (plan.example ? '<p class="exnote">Example plan, made with the same agent and live Qloo data. Change anything above and press “Plan my trip” for your own.</p>' : '') +
-    '<h2>' + esc(plan.title) + '</h2><p>' + esc(plan.summary) + '</p><div class="meta">' +
+    '<h2 dir="auto">' + esc(plan.title) + '</h2><p dir="auto">' + esc(plan.summary) + '</p><div class="meta">' +
     '<span>📍 ' + esc((plan.destination.name || '').split(',').slice(0, 3).join(',')) + '</span>' +
     '<span>' + plan.days.length + (plan.days.length === 1 ? ' day' : ' days') + ' · ' + stops + ' stops</span>' +
     '<span>🍽️ ' + meals + ' halal-aware meals' + (verified ? ' (' + verified + ' listed halal)' : '') + '</span>' +
@@ -100,7 +101,7 @@ function render(plan) {
       (plan.audiences || []).map(function (x) { return '<span class="aud">' + esc(x) + '</span>'; }).join('') + '</div>' : '');
   var h = '';
   plan.days.forEach(function (day, di) {
-    h += '<article class="card day"><div class="day-h"><div><h3>Day ' + day.day + ' · ' + esc(day.theme) + '</h3>' +
+    h += '<article class="card day"><div class="day-h"><div><h3>Day ' + day.day + ' · <span dir="auto">' + esc(day.theme) + '</span></h3>' +
       '<div class="date">' + esc(fmtDate(day.date)) + (day.hijri ? ' · ' + esc(day.hijri) + ' AH' : '') + '</div></div></div>';
     if (day.prayer_times) {
       h += '<div class="ptimes">' + ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'].map(function (p) {
@@ -134,13 +135,13 @@ function render(plan) {
       if (s.jumuah) badges = '<span class="badge jumuah">Jumu\'ah · Friday prayer</span>' + badges;
       var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
       list += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '"><div class="t">' + esc(s.time) + '</div><div class="dot">' + (si + 1) + '</div>' +
-        '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + '</h4><p>' + esc(s.why) + '</p>' +
+        '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + '</h4><p dir="auto">' + esc(s.why) + '</p>' +
         (badges ? '<div class="badges">' + badges + '</div>' : '') + '</div>' + img + '</div></li>';
     });
     h += '<div class="move">≈ ' + walk.toFixed(1) + ' km on foot' + (rides ? ' · ' + rides + (rides === 1 ? ' ride' : ' rides') + ' by metro or taxi' : '') + '</div>';
     h += '<ol class="stops">' + list + '</ol></article>';
   });
-  if (plan.tips && plan.tips.length) h += '<section class="card tips"><h3>Good to know</h3><ul>' + plan.tips.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul></section>';
+  if (plan.tips && plan.tips.length) h += '<section class="card tips"><h3>Good to know</h3><ul>' + plan.tips.map(function (t) { return '<li dir="auto">' + esc(t) + '</li>'; }).join('') + '</ul></section>';
   $('#days').innerHTML = h;
   var q = plan.qloo_calls || {}, qn = (q.requests || 0) + (q.cached || 0);
   $('#trace summary').textContent = '🤖 How Rihla planned this — ' + (plan.trace || []).length + ' agent steps' +
