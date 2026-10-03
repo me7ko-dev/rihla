@@ -264,7 +264,7 @@ def _qplace(it: dict, kind: str, trip: Trip, lat: float, lon: float, because: li
     hits = [_as_written(trip.tastes, k) for k in it.get("known_for") or []
             if trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())}][:2]
     p = {k: it.get(k) for k in ("name", "lat", "lon", "address", "image", "website", "rating", "categories", "affinity",
-                                "description", "known_for")}
+                                "description", "known_for", "hours")}
     p["kids_ok"] = (it.get("kids") or 0) >= 0.3
     p["topic"] = hits
     p.update(kind=kind, because=because, qloo_halal=qloo.halal_signal(it), alcohol=qloo.serves_alcohol(it), qloo_id=it["id"],
@@ -713,7 +713,8 @@ def _prayer_name(hhmm: str, timings: dict) -> str:
 
 
 STOP_FIELDS = ("name", "lat", "lon", "address", "cuisine", "halal_level", "halal_reason", "website", "image", "source",
-               "affinity", "because", "categories", "rating", "alcohol", "description", "kids_ok", "topic", "popular")
+               "affinity", "because", "categories", "rating", "alcohol", "description", "kids_ok", "topic", "popular",
+               "open_today")
 
 
 def _fill_stop(s: dict, p: dict) -> dict:
@@ -741,6 +742,50 @@ def _centre(day: dict, fallback: tuple[float, float]) -> tuple[float, float]:
 
 
 DURATION = {"sight": 75, "meal": 60, "prayer": 20, "rest": 45}  # minutes a stop usually takes
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _opening(p: dict, date: str | None) -> tuple[int, int] | None | bool:
+    """Qloo opening hours of a place on that date: (opens, closes) in minutes, False if closed, None if unknown."""
+    try:
+        slots = (p.get("hours") or {}).get(WEEKDAYS[dt.date.fromisoformat(date).weekday()])
+    except (TypeError, ValueError):
+        return None
+    if not slots:
+        return None
+    if all(x.get("closed") for x in slots):
+        return False
+    opens = [_mins(str(x.get("opens") or "")[1:6]) for x in slots if not x.get("closed")]
+    closes = [_mins(str(x.get("closes") or "")[1:6]) for x in slots if not x.get("closed")]
+    opens, closes = [o for o in opens if o is not None], [c for c in closes if c is not None]
+    if not opens or not closes:
+        return None
+    o, c = min(opens), max(closes)
+    return (o, c if c > o else 24 * 60)  # closes after midnight
+
+
+def _open_at(p: dict, date: str | None, t: int) -> bool:
+    hours = _opening(p, date)
+    return hours is None or (hours is not False and hours[0] <= t <= hours[1] - 60)
+
+
+def _check_hours(final: dict, trip: Trip, drop: bool = True) -> None:
+    """Visit places while they are open: move a visit to opening time, drop it if the place is closed that day."""
+    for day in final.get("days", []):
+        for st in list(day["stops"]):
+            if st.get("kind") != "sight":
+                continue
+            hours = _opening(trip.places.get(st.get("ref"), {}), day.get("date"))
+            t = _mins(st.get("time", "")) or 0
+            if hours is False or (hours and t >= hours[1] - 45):
+                if drop:
+                    day["stops"].remove(st)
+                continue
+            if hours:
+                st["open_today"] = f"{_hhmm(hours[0])}–{_hhmm(hours[1] % (24 * 60))}"
+                if t < hours[0]:
+                    st["time"] = _hhmm((hours[0] + 14) // 15 * 15)
+        day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
 
 
 def _hhmm(m: int) -> str:
@@ -803,7 +848,8 @@ def _fill_days(final: dict, trip: Trip) -> None:
                 break
             start = (max(gaps)[1] + 10 + 14) // 15 * 15
             here = _near_stop(day, start, home)
-            pool = [x for x in trip.near("sights", *here, 3000, 60) if _key(x["name"]) not in used and not x.get("halal_level")]
+            pool = [x for x in trip.near("sights", *here, 3000, 60) if _key(x["name"]) not in used and not x.get("halal_level")
+                    and _open_at(x, day.get("date"), start)]
             pick = min(pool, default=None, key=lambda x: x["distance_m"] - 900 * bool(x.get("topic")) - 700 * bool(x.get("popular"))
                        - 500 * bool(x.get("because")) - 300 * bool(x.get("kids_ok") and trip.kids))
             if not pick:
@@ -844,7 +890,9 @@ def _polish(final: dict, trip: Trip) -> None:
             in_plan.add(_key(x["name"]))
             done |= words(x)
             added += 1
+    _check_hours(final, trip)
     _fill_days(final, trip)
+    _check_hours(final, trip, drop=False)
     # pray at the mosque nearest to where the family is at that time (the model tends to reuse one mosque all day)
     for d in days:
         for i, st in enumerate(d["stops"]):

@@ -175,6 +175,7 @@ def _simplify(e: dict) -> dict:
         "description": (p.get("short_description") or p.get("description") or "")[:300],
         "known_for": [k["name"] for k in kw[:8]],  # what reviewers mention most, e.g. "dinosaurs" at the Natural History Museum
         "kids": kids,
+        "hours": p.get("hours") if isinstance(p.get("hours"), dict) else None,  # {"monday": [{"opens": "T10:00:00", ...}]}
         "image": img,
         "website": p.get("website") or "",
         "price_level": p.get("price_level"),

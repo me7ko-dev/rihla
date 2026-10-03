@@ -117,6 +117,7 @@ function render(plan) {
       if (s.topic && s.topic.length) badges += '<span class="badge topic">Known for ' + esc(s.topic.join(' & ')) + '</span>';
       if (s.popular && s.kind === 'sight') badges += '<span class="badge must">Must-see</span>';
       if (s.kids_ok && s.kind !== 'prayer') badges += '<span class="badge kids">Good for kids</span>';
+      if (s.open_today) badges += '<span class="badge k" title="Opening hours that day (Qloo)">Open ' + esc(s.open_today) + '</span>';
       if (s.alcohol && s.kind === 'meal') badges += '<span class="badge alc" title="Qloo lists alcohol at this place">Serves alcohol</span>';
       if (s.cuisine) badges += '<span class="badge k">' + esc(s.cuisine) + '</span>';
       else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(s.categories[0]) + '</span>';
