@@ -234,6 +234,20 @@ async def insights(kind: str, *, interests: list[str] | None = None, audiences: 
     return [i for i in items if i.get("id") and not (kind == "place" and is_alcohol_venue(i))]
 
 
+async def locate(name: str) -> dict | None:
+    """A city or district by name (when OpenStreetMap's geocoder is unavailable): Qloo locality for the point,
+    the nearest Qloo place for the country."""
+    found = _entities(await _get("/search", {"query": name, "types": "urn:entity:locality", "take": 1}))
+    loc = (found[0].get("location") or {}) if found else {}
+    if loc.get("lat") is None:
+        return None
+    near = _entities(await _get("/v2/insights", {"filter.type": TYPES["place"], "filter.location": f"POINT({loc['lon']} {loc['lat']})",
+                                                 "filter.location.radius": 5000, "take": 1}))
+    geo = ((near[0].get("properties") or {}).get("geocode") or {}) if near else {}
+    return {"name": found[0].get("name", name) + (f", {geo['country']}" if geo.get("country") else ""),
+            "lat": float(loc["lat"]), "lon": float(loc["lon"]), "country_code": (geo.get("country_code") or "").lower()}
+
+
 async def find_tags(query: str, take: int = 5) -> list[dict]:
     data = await _get("/v2/tags", {"filter.query": query, "feature.semantic_search": "true", "take": take})
     return [{"id": t.get("id") or t.get("tag_id"), "name": t.get("name"), "type": t.get("type") or t.get("subtype")}

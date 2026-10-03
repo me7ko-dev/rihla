@@ -650,7 +650,15 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
     """emit(event) is awaited for every step so the UI can show live progress."""
     t0, q0 = time.time(), dict(qloo.stats)
     await emit({"type": "step", "text": f"Locating {destination}"})
-    dest = await osm.geocode(destination)
+    try:
+        dest = await osm.geocode(destination)
+    except Exception:  # OpenStreetMap's geocoder can refuse cloud servers: ask Qloo instead
+        dest = None
+    if not dest:
+        try:
+            dest = await qloo.locate(destination)
+        except Exception:
+            dest = None
     if not dest:
         raise ValueError(f"Could not find '{destination}' on the map")
     trip = Trip(dest, travellers, tastes)
