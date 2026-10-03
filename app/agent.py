@@ -764,6 +764,39 @@ def _opening(p: dict, date: str | None) -> tuple[int, int] | None | bool:
     return (o, c if c > o else 24 * 60)  # closes after midnight
 
 
+def _friday(date: str | None) -> bool:
+    try:
+        return dt.date.fromisoformat(date).weekday() == 4
+    except (TypeError, ValueError):
+        return False
+
+
+def _jumuah(final: dict, trip: Trip) -> None:
+    """On Friday the noon prayer is Jumu'ah: a congregational prayer with a sermon, held in a larger mosque.
+    Rihla names it, prefers a well-known mosque near the morning's stops and keeps 45 minutes for it."""
+    for day in final.get("days", []):
+        if not _friday(day.get("date")):
+            continue
+        for st in day["stops"]:
+            if st.get("kind") == "prayer" and st.get("prayer") == "Dhuhr":
+                t = _mins(st.get("time", "")) or 13 * 60
+                here = _near_stop(day, t, (trip.dest["lat"], trip.dest["lon"]))
+                big = min((m for m in trip.near("mosques", *here, 3000, 20) if m.get("source") == "qloo"),
+                          key=lambda m: m["distance_m"], default=None)
+                if big and big["ref"] != st.get("ref"):
+                    keep = {k: st[k] for k in ("time", "kind", "prayer")}
+                    st.clear()
+                    st.update(_fill_stop(dict(keep, ref=big["ref"]), big))
+                st["jumuah"] = True
+                st["why"] = "Jumu'ah, the Friday congregational prayer with a sermon — arrive 15 minutes early; allow about 45 minutes."
+                # nothing else may start during the Friday prayer
+                for other in day["stops"]:
+                    o = _mins(other.get("time", "")) or 0
+                    if other is not st and other.get("kind") != "prayer" and t - 10 <= o < t + 45:
+                        other["time"] = _hhmm((t + 45 + 14) // 15 * 15)
+                day["stops"].sort(key=lambda x: _mins(x.get("time", "")) or 0)
+
+
 def _open_at(p: dict, date: str | None, t: int) -> bool:
     hours = _opening(p, date)
     return hours is None or (hours is not False and hours[0] <= t <= hours[1] - 60)
@@ -909,6 +942,7 @@ def _polish(final: dict, trip: Trip) -> None:
                 st.clear()
                 st.update(_fill_stop(dict(keep, ref=best["ref"], why=f"{keep.get('prayer', 'Prayer')} at the mosque nearest to "
                                                                        f"{around[0].get('name', 'your previous stop')}."), best))
+    _jumuah(final, trip)
     # a "why" that names another place (the model mixed two stops up) is replaced by the facts we have
     names = {_key(x.get("name", "")) for x in trip.places.values() if len(x.get("name", "")) >= 8}
     for d in days:

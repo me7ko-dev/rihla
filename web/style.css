@@ -134,3 +134,4 @@ main{padding:28px 20px 10px}
 .examples button{font:inherit;font-size:12.5px;border:1px solid var(--teal);background:#fff;border-radius:999px;padding:5px 11px;cursor:pointer;color:var(--teal);font-weight:600}
 .examples button:hover{background:var(--teal);color:#fff}
 .sum .exnote{background:#FBEFD2;color:#7A5200;border-radius:10px;padding:8px 12px;font-size:13.5px;margin:0 0 12px}
+.badge.jumuah{background:var(--prayer);color:#fff}

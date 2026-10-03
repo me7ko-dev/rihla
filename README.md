@@ -11,7 +11,7 @@ what you love — films, books, authors, music, games, teams — and its agent b
 - 🍽️ **halal food with an honest confidence level** — *Listed halal*, *Likely halal* or *Ask* — and a clear
   *Serves alcohol* flag; bars, pubs and meyhanes are never suggested
 - 🕌 **every day built around the prayers**: Dhuhr, Asr and Maghrib at the mosque nearest to where you are at that
-  moment, with the day's real prayer times and Hijri date
+  moment, with the day's real prayer times and Hijri date — and Jumu'ah at a well-known mosque on Fridays
 - 👨‍👩‍👧 **family-aware**: *Good for kids* places, famous highlights mixed with personal finds
 
 Built for the [Qloo Agentic Hackathon](https://qloo.devpost.com/).

@@ -121,6 +121,7 @@ function render(plan) {
       if (s.alcohol && s.kind === 'meal') badges += '<span class="badge alc" title="Qloo lists alcohol at this place">Serves alcohol</span>';
       if (s.cuisine) badges += '<span class="badge k">' + esc(s.cuisine) + '</span>';
       else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(s.categories[0]) + '</span>';
+      if (s.jumuah) badges = '<span class="badge jumuah">Jumu\'ah · Friday prayer</span>' + badges;
       var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
       h += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '"><div class="t">' + esc(s.time) + '</div><div class="dot">' + (si + 1) + '</div>' +
         '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + '</h4><p>' + esc(s.why) + '</p>' +
