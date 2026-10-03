@@ -2,7 +2,7 @@
 
 **A travel agent that knows your taste and respects your faith.**
 
-🌍 **Live demo:** https://rihla-agent.vercel.app · 📦 **Code:** https://github.com/me7ko-dev/rihla ·
+🌍 **Live demo:** https://rihla-agent.vercel.app · 🎬 **Video (1 min):** https://youtu.be/KpyL4OQyVLw · 📦 **Code:** https://github.com/me7ko-dev/rihla ·
 [![tests](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml/badge.svg)](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml)
 
 ![A two-day family plan for London: Natural History Museum "known for dinosaurs", halal meals, prayers at the nearest mosque](docs/rihla-plan.png)
