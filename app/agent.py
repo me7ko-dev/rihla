@@ -123,7 +123,7 @@ class LLM:
     def __init__(self):
         # Nemotron: turning the visible "thinking" off makes each call ~2 s instead of 5-30 s
         nv = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}} if "nvidia" in config.LLM_BASE_URL else {}
-        self.clients = [(AsyncOpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL, timeout=90), config.LLM_MODEL, nv)]
+        self.clients = [(AsyncOpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL, timeout=150), config.LLM_MODEL, nv)]
         if config.FALLBACK_API_KEY:
             self.clients.append((AsyncOpenAI(api_key=config.FALLBACK_API_KEY, base_url=config.FALLBACK_BASE_URL, timeout=90),
                                  config.FALLBACK_MODEL, {}))
@@ -183,7 +183,9 @@ class Trip:
         self.model = ""
         self.entities: dict[str, dict] = {}  # every Qloo entity seen in taste_entities, by id
         self.signals: dict[str, str] = {}    # the traveller's taste signals: Qloo id -> name
-        self.kids = bool(KIDS.search(travellers or ""))
+        ages = [int(a) for a in re.findall(r"\b(\d{1,2})\b", travellers or "")]
+        self.kids = bool(KIDS.search(travellers or "")) and (not ages or min(ages) <= 12) or \
+            bool(re.search(r"\b(bab(y|ies)|toddlers?|infants?)\b", travellers or "", re.I))
         self.audiences = [qloo.AUDIENCES["muslim"]] + ([qloo.AUDIENCES["kids"]] if self.kids else [])
         self.osm_task: asyncio.Task | None = None
         self._osm: dict | None = None
@@ -341,15 +343,29 @@ async def _lookup(trip: Trip, query: str, kind: str | None) -> tuple[list, str]:
     key, want = _key(q), qloo.TYPES.get(kind or "", "")
     res = await asyncio.gather(qloo.search(q, None, take=8), qloo.search(q, kind, take=5) if kind else asyncio.sleep(0, []),
                                return_exceptions=True)
-    cands = {}
+    cands, places = {}, []
     for e in [x for r in res if isinstance(r, list) for x in r]:
         if str(e["type"]).rsplit(":", 1)[-1] not in NOT_A_TASTE:
             cands.setdefault(e["id"], e)
+        elif e["type"] == "urn:entity:place" and e.get("lat") is not None and \
+                osm.distance_m(e["lat"], e["lon"], trip.dest["lat"], trip.dest["lon"]) < 40000 and \
+                (_key(e["name"]) == key or re.search(r"\b" + re.escape(key) + r"\b", _key(e["name"]))):
+            places.append(e)
+    if places:  # they want to go there: a must-visit stop
+        it = max(places, key=lambda e: (_key(e["name"]) == key, e.get("popularity") or 0))
+        p = _qplace(it, "landmark", trip, trip.dest["lat"], trip.dest["lon"])
+        p["requested"] = True
+        # "Burj Khalifa" is one place: its words must not match other places' keywords ("Burj al Arab")
+        trip.topics -= {_singular(w) for w in re.findall(r"[a-z]{4,}", key)}
+        ref = "qloo:" + str(it["id"])
+        trip.keep(ref, p, "qloo", "sights")
+        return [{"ref": ref, "name": it["name"], "type": "place",
+                 "note": "a place the traveller wants to visit: include it in the plan"}], f"{it['name']} (a place to visit)"
 
     def score(e: dict) -> float:
         name = _key(e["name"])
         whole = bool(key) and re.search(r"\b" + re.escape(key) + r"\b", name)  # "marvel" is not in "marvelous"
-        match = 1.0 if name == key else 0.7 if whole else 0.3 if SequenceMatcher(None, key, name).ratio() >= 0.6 else 0
+        match = 1.0 if name == key else 0.7 if whole else 0.3 if SequenceMatcher(None, key, name).ratio() >= 0.8 else 0
         if not match:
             return 0
         person = e["type"] in PEOPLE or (e["type"] == "urn:entity:author" and want != "urn:entity:book")
@@ -714,7 +730,7 @@ def _prayer_name(hhmm: str, timings: dict) -> str:
 
 STOP_FIELDS = ("name", "lat", "lon", "address", "cuisine", "halal_level", "halal_reason", "website", "image", "source",
                "affinity", "because", "categories", "rating", "alcohol", "description", "kids_ok", "topic", "popular",
-               "open_today")
+               "open_today", "requested")
 
 
 def _fill_stop(s: dict, p: dict) -> dict:
@@ -731,9 +747,12 @@ def _short(text: str, n: int = 120) -> str:
 def _why(p: dict) -> str:
     """A factual 'why' for a stop the code added (no model text to reuse)."""
     about = _short(p.get("description", ""))
+    if p.get("requested"):
+        return f"You asked for {p.get('name', 'this place')}." + (f" {about}" if about else "")
     if p.get("topic"):
         return f"Known for {p['topic'][0]}, which you said you love." + (f" {about}" if about else "")
-    return about or "Close to your other stops."
+    kind = (p.get("categories") or [p.get("kind") or "place"])[0]
+    return about or f"{kind[:1].upper() + kind[1:]} close to your other stops."
 
 
 def _centre(day: dict, fallback: tuple[float, float]) -> tuple[float, float]:
@@ -881,16 +900,93 @@ def _fill_days(final: dict, trip: Trip) -> None:
                 break
             start = (max(gaps)[1] + 10 + 14) // 15 * 15
             here = _near_stop(day, start, home)
+            seen = [(st["lat"], st["lon"]) for d in days for st in d["stops"] if st.get("kind") == "sight" and st.get("lat") is not None]
             pool = [x for x in trip.near("sights", *here, 3000, 60) if _key(x["name"]) not in used and not x.get("halal_level")
-                    and _open_at(x, day.get("date"), start)]
+                    and _open_at(x, day.get("date"), start)
+                    # not part of a place already in the plan (the Imperial Council Hall is inside Topkapi Palace)
+                    and all(osm.distance_m(x["lat"], x["lon"], a, b) > 300 for a, b in seen)]
             pick = min(pool, default=None, key=lambda x: x["distance_m"] - 900 * bool(x.get("topic")) - 700 * bool(x.get("popular"))
-                       - 500 * bool(x.get("because")) - 300 * bool(x.get("kids_ok") and trip.kids))
+                       - 500 * bool(x.get("because")) - 300 * bool(x.get("kids_ok") and trip.kids)
+                       + 600 * (not x.get("description")))
             if not pick:
                 break
             day["stops"].append(_fill_stop({"time": _hhmm(start), "kind": "sight", "ref": pick["ref"], "why": _why(pick),
                                             "added_by": "rihla"}, pick))
             used.add(_key(pick["name"]))
         day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
+
+
+def _untangle(final: dict) -> None:
+    """No two stops at the same time: each stop starts when the previous one is over (prayers stay at their
+    exact times; a visit that would start during a prayer starts after it)."""
+    for day in final.get("days", []):
+        stops = sorted(day["stops"], key=lambda st: (_mins(st.get("time", "")) or 0, st.get("kind") != "prayer"))
+        free = 0
+        for st in stops:
+            t = _mins(st.get("time", "")) or 0
+            if st.get("kind") == "prayer":
+                free = max(free, t + DURATION["prayer"])
+                continue
+            if t < free:
+                t = (free + 4) // 5 * 5
+                st["time"] = _hhmm(t)
+            free = t + DURATION.get(st.get("kind"), 45)
+        day["stops"] = sorted(stops, key=lambda st: _mins(st.get("time", "")) or 0)
+
+
+def _path_m(points: list[tuple[float, float]]) -> float:
+    return sum(osm.distance_m(*points[i], *points[i + 1]) for i in range(len(points) - 1))
+
+
+def _route(final: dict) -> None:
+    """Walk less: the model often zigzags across a city. Within each day the sights are reordered into the
+    shortest path (nearest next, starting where the day starts) and take over the model's time slots;
+    meals and prayers keep their times."""
+    for day in final.get("days", []):
+        sights = [st for st in day["stops"] if st.get("kind") == "sight" and st.get("lat") is not None]
+        if len(sights) < 3:
+            continue
+        slots = [st["time"] for st in sights]
+        order, left = [sights[0]], sights[1:]
+        while left:
+            nxt = min(left, key=lambda st: osm.distance_m(order[-1]["lat"], order[-1]["lon"], st["lat"], st["lon"]))
+            order.append(nxt)
+            left.remove(nxt)
+        pts = lambda lst: [(st["lat"], st["lon"]) for st in lst]
+        if _path_m(pts(order)) < 0.8 * _path_m(pts(sights)):
+            for st, t in zip(order, slots):
+                st["time"] = t
+            day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
+
+
+async def _meals_nearby(final: dict, trip: Trip) -> None:
+    """Eat near where you are: a meal more than 2 km from the previous stop is swapped for an equally sure
+    halal option within 1.2 km of it (the model tends to pick restaurants from the city centre)."""
+    used = {_key(st.get("name", "")) for d in final.get("days", []) for st in d["stops"] if st.get("kind") != "prayer"}
+    for day in final.get("days", []):
+        for i, st in enumerate(day["stops"]):
+            if st.get("kind") != "meal" or st.get("lat") is None:
+                continue
+            before = [x for x in day["stops"][:i][::-1] if x.get("kind") != "prayer" and x.get("lat") is not None]
+            if not before:
+                continue
+            here = (before[0]["lat"], before[0]["lon"])
+            if osm.distance_m(*here, st["lat"], st["lon"]) <= 2000:
+                continue
+            rank = RANK.get(st.get("halal_level"), 3)
+            def options():
+                return [x for x in trip.near("halal", *here, 1500, 30)
+                        if _key(x["name"]) not in used and RANK.get(x.get("halal_level"), 3) <= rank]
+            if not options():  # nothing looked up around here yet: ask Qloo and OpenStreetMap
+                await _safe_tool(trip, "halal_food_near", {"lat": here[0], "lon": here[1], "radius_m": 1200})
+            food = min(options(), key=lambda x: (RANK.get(x.get("halal_level"), 3), bool(x.get("alcohol")), x["distance_m"]), default=None)
+            if food:
+                used.discard(_key(st.get("name", "")))
+                keep = {k: st[k] for k in ("time", "kind") if k in st}
+                st.clear()
+                st.update(_fill_stop(dict(keep, ref=food["ref"], added_by="rihla",
+                                          why=f"A halal meal a short walk from {before[0].get('name', 'your previous stop')}."), food))
+                used.add(_key(food["name"]))
 
 
 def _polish(final: dict, trip: Trip) -> None:
@@ -902,16 +998,16 @@ def _polish(final: dict, trip: Trip) -> None:
         return
     in_plan = {_key(st.get("name", "")) for d in days for st in d["stops"]}
     words = lambda x: {_singular(w) for k in x.get("topic") or [] for w in re.findall(r"[a-z]{4,}", k.lower())} & trip.topics
-    musts = sorted((x for x in trip.places.values() if x.get("topic") and x.get("source") == "qloo"
+    musts = sorted((x for x in trip.places.values() if (x.get("topic") or x.get("requested")) and x.get("source") == "qloo"
                     and not x.get("halal_level") and x.get("kind") != "mosque" and x.get("lat") is not None),
-                   key=lambda x: (not x.get("popular"), x.get("distance_m") or 0))
+                   key=lambda x: (not x.get("requested"), not x.get("popular"), x.get("distance_m") or 0))
     done = set().union(*[words(x) for x in musts if _key(x["name"]) in in_plan]) if musts else set()
     done |= {w for d in days for st in d["stops"] for w in words(st)}
     added = 0
     for x in musts:
-        if added < 2 and _key(x["name"]) not in in_plan and not words(x) <= done:
+        if added < 3 and _key(x["name"]) not in in_plan and (x.get("requested") or not words(x) <= done):
             day = min(days, key=lambda d: osm.distance_m(*_centre(d, (trip.dest["lat"], trip.dest["lon"])), x["lat"], x["lon"]))
-            weak = [st for st in day["stops"] if st.get("kind") == "sight" and not st.get("topic")]
+            weak = [st for st in day["stops"] if st.get("kind") == "sight" and not st.get("topic") and not st.get("requested")]
             weak.sort(key=lambda st: (bool(st.get("because")), bool(st.get("popular"))))
             new = _fill_stop({"time": weak[0]["time"] if weak else "10:00", "kind": "sight", "ref": x["ref"], "why": _why(x),
                               "added_by": "rihla"}, x)
@@ -958,6 +1054,7 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     last = (trip.dest["lat"], trip.dest["lon"])
     used: set[str] = set()
     used_names: set[str] = set()
+    used_points: list[tuple[float, float]] = []  # the same museum can exist twice in the data under two names
     for i, day in enumerate(final.get("days", [])):
         day["date"] = prayers[i]["date"] if i < len(prayers) else None
         day["hijri"] = prayers[i]["hijri"] if i < len(prayers) else None
@@ -995,7 +1092,9 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
                 continue
             if s.get("kind") not in ("sight", "meal", "prayer", "rest"):
                 s["kind"] = "prayer" if p.get("kind") == "mosque" else "meal" if p.get("halal_level") else "sight"
-            if s["kind"] != "prayer" and (s.get("ref") in used or _key(p.get("name", "")) in used_names):
+            twin = s["kind"] == "sight" and p.get("lat") is not None and \
+                any(osm.distance_m(p["lat"], p["lon"], a, b) < 80 for a, b in used_points)
+            if s["kind"] != "prayer" and (s.get("ref") in used or _key(p.get("name", "")) in used_names or twin):
                 # never the same sight or restaurant twice in one trip (not even another branch of a chain)
                 if s["kind"] != "meal":
                     continue
@@ -1007,12 +1106,18 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
             used.add(s.get("ref"))
             if s["kind"] != "prayer":
                 used_names.add(_key(p.get("name", "")))
+            if s["kind"] == "sight" and p.get("lat") is not None:
+                used_points.append((p["lat"], p["lon"]))
             _fill_stop(s, p)
             if p.get("lat"):
                 last = (p["lat"], p["lon"])
             stops.append(s)
         day["stops"] = sorted(stops, key=lambda x: _mins(x.get("time", "")) or 0)
     _polish(final, trip)
+    _route(final)
+    _check_hours(final, trip, drop=False)
+    await _meals_nearby(final, trip)
+    _untangle(final)
     final["destination"] = trip.dest
     final["trace"] = trip.trace
     final["signals"] = list(trip.signals.values())

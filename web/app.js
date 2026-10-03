@@ -107,13 +107,23 @@ function render(plan) {
         return day.prayer_times[p] ? '<span>' + p + '<b>' + esc(day.prayer_times[p]) + '</b></span>' : '';
       }).join('') + '</div>';
     }
-    h += '<ol class="stops">';
+    var list = '', prev = null, walk = 0, rides = 0;
     day.stops.forEach(function (s, si) {
       var id = di + '-' + si;
+      // how to get here from the previous stop (straight line x 1.3 for streets)
+      if (prev && s.lat != null) {
+        var km = distKm(prev, s) * 1.3;
+        if (km >= 0.15) {
+          if (km <= 1.8) { walk += km; list += '<li class="leg">🚶 ' + Math.max(2, Math.round(km / 0.075)) + ' min walk</li>'; }
+          else { rides++; list += '<li class="leg">🚇 ' + km.toFixed(1) + ' km · metro or taxi</li>'; }
+        }
+      }
+      if (s.lat != null) prev = s;
       var badges = '';
       if (s.kind === 'meal' && s.halal_level) badges += '<span class="badge ' + s.halal_level + '" title="' + esc(s.halal_reason) + '">' + LEVEL[s.halal_level] + '</span>';
       if (s.because && s.because.length) badges += '<span class="badge src">Because you love ' + esc(s.because.join(' & ')) + '</span>';
       else if (s.source === 'qloo' && s.affinity && s.kind !== 'prayer') badges += '<span class="badge src">Taste match · ' + Math.round(s.affinity * 100) + '%</span>';
+      if (s.requested) badges += '<span class="badge must">You asked for this</span>';
       if (s.topic && s.topic.length) badges += '<span class="badge topic">Known for ' + esc(s.topic.join(' & ')) + '</span>';
       if (s.popular && s.kind === 'sight') badges += '<span class="badge must">Must-see</span>';
       if (s.kids_ok && s.kind !== 'prayer') badges += '<span class="badge kids">Good for kids</span>';
@@ -123,14 +133,18 @@ function render(plan) {
       else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(s.categories[0]) + '</span>';
       if (s.jumuah) badges = '<span class="badge jumuah">Jumu\'ah · Friday prayer</span>' + badges;
       var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
-      h += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '"><div class="t">' + esc(s.time) + '</div><div class="dot">' + (si + 1) + '</div>' +
+      list += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '"><div class="t">' + esc(s.time) + '</div><div class="dot">' + (si + 1) + '</div>' +
         '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + '</h4><p>' + esc(s.why) + '</p>' +
         (badges ? '<div class="badges">' + badges + '</div>' : '') + '</div>' + img + '</div></li>';
     });
-    h += '</ol></article>';
+    h += '<div class="move">≈ ' + walk.toFixed(1) + ' km on foot' + (rides ? ' · ' + rides + (rides === 1 ? ' ride' : ' rides') + ' by metro or taxi' : '') + '</div>';
+    h += '<ol class="stops">' + list + '</ol></article>';
   });
   if (plan.tips && plan.tips.length) h += '<section class="card tips"><h3>Good to know</h3><ul>' + plan.tips.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul></section>';
   $('#days').innerHTML = h;
+  var q = plan.qloo_calls || {}, qn = (q.requests || 0) + (q.cached || 0);
+  $('#trace summary').textContent = '🤖 How Rihla planned this — ' + (plan.trace || []).length + ' agent steps' +
+    (qn ? ' · ' + qn + ' Qloo calls' : '') + ' · model ' + String(plan.model || '').split('/').pop();
   $('#trace ol').innerHTML = (plan.trace || []).map(function (t) {
     var a = t.args || {}; var what = a.query || a.category || (typeof a.lat === 'number' ? a.lat.toFixed(3) + ', ' + a.lon.toFixed(3) : '');
     return '<li><code>' + esc(t.tool) + '</code> ' + esc(what) + (t.note ? ' → ' + esc(t.note) : ' → ' + t.found + ' found') + '</li>';
@@ -154,6 +168,12 @@ function showDay(d) {
     if (on) { dl.addTo(layer); dl.eachLayer(function (m) { if (m.getLatLng) pts.push(m.getLatLng()); }); } else dl.remove();
   });
   if (pts.length) map.fitBounds(pts, { padding: [30, 30] });
+}
+
+function distKm(a, b) {
+  var r = 6371, toR = Math.PI / 180, dLat = (b.lat - a.lat) * toR, dLon = (b.lon - a.lon) * toR;
+  var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * r * Math.asin(Math.sqrt(x));
 }
 
 function fmtDate(iso) {

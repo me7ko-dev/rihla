@@ -4,6 +4,8 @@
 
 🌍 **Live demo:** https://rihla-agent.vercel.app · 📦 **Code:** https://github.com/me7ko-dev/rihla
 
+![A two-day family plan for London: Natural History Museum "known for dinosaurs", halal meals, prayers at the nearest mosque](docs/rihla-plan.png)
+
 Rihla plans city trips for Muslim travellers and families. Tell it where you are going, who is travelling and
 what you love — films, books, authors, music, games, teams — and its agent builds a day-by-day plan:
 

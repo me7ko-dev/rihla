@@ -88,11 +88,14 @@ def _place(el: dict, lat: float, lon: float) -> dict:
         "address": " ".join(x for x in [t.get("addr:street", ""), t.get("addr:housenumber", "")] if x),
         "website": t.get("website") or t.get("contact:website", ""),
         "opening_hours": t.get("opening_hours", ""),
-        "kind": t.get("amenity") or t.get("shop") or "",
+        "kind": t.get("amenity") or t.get("shop") or t.get("leisure") or "",
+        # a bar inside, or beer/wine on the menu: shown as "Serves alcohol"
+        "alcohol": t.get("bar") == "yes" or any(t.get(k) in ("yes", "served") for k in ("drink:beer", "drink:wine", "drink:spirits")),
     }
 
 
 CACHE_DIR = CACHE / "osm"
+EATERIES = ("restaurant", "fast_food", "cafe", "food_court")  # a halal-tagged mini-golf or butcher is not a meal
 
 
 async def area(lat: float, lon: float, radius_m: int = 3000, all_food: bool = False) -> dict:
@@ -135,10 +138,12 @@ async def area(lat: float, lon: float, radius_m: int = 3000, all_food: bool = Fa
             continue
         if t.get("religion") == "muslim" and t.get("amenity") == "place_of_worship":
             mosq.append(p)
-        elif t.get("diet:halal") in ("yes", "only") or (all_food and t.get("amenity") in ("restaurant", "fast_food", "cafe", "food_court")):
+        elif t.get("amenity") in EATERIES and (t.get("diet:halal") in ("yes", "only") or all_food):
             if t.get("diet:halal") == "no" or "beer" in t.get("cuisine", "") or t.get("drink:beer") == "yes" and all_food and not t.get("diet:halal"):
                 continue
             halal.append(p)
+        elif not (t.get("tourism") or t.get("leisure") == "park" or t.get("historic")):
+            continue  # came in only through the halal query (e.g. a mini-golf): neither a meal nor a sight
         else:
             p["kind"] = t.get("tourism") or ("park" if t.get("leisure") == "park" else "historic")
             p["wikidata"] = t.get("wikidata", "")
