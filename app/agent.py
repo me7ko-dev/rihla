@@ -811,7 +811,8 @@ def _jumuah(final: dict, trip: Trip) -> None:
                 # nothing else may start during the Friday prayer
                 for other in day["stops"]:
                     o = _mins(other.get("time", "")) or 0
-                    if other is not st and other.get("kind") != "prayer" and t - 10 <= o < t + 45:
+                    ends = o + DURATION.get(other.get("kind"), 45)
+                    if other is not st and other.get("kind") != "prayer" and o < t + 45 and ends > t - 30:
                         other["time"] = _hhmm((t + 45 + 14) // 15 * 15)
                 day["stops"].sort(key=lambda x: _mins(x.get("time", "")) or 0)
 
