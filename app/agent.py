@@ -261,7 +261,8 @@ def _same_venue(p: dict, others, by_distance: bool = False) -> dict | None:
 def _qplace(it: dict, kind: str, trip: Trip, lat: float, lon: float, because: list[str] | None = None) -> dict:
     """A Qloo place as Rihla's place dict; 'because' = the traveller's tastes it matches."""
     because = because or []
-    hits = [k for k in it.get("known_for") or [] if trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())}][:2]
+    hits = [_as_written(trip.tastes, k) for k in it.get("known_for") or []
+            if trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())}][:2]
     p = {k: it.get(k) for k in ("name", "lat", "lon", "address", "image", "website", "rating", "categories", "affinity",
                                 "description", "known_for")}
     p["kids_ok"] = (it.get("kids") or 0) >= 0.3
@@ -381,6 +382,15 @@ def _named(text: str, query: str) -> bool:
     if not any(text[m.start()].isupper() and mid(m.start()) for m in re.finditer(r"\b\w", text)):
         return True  # no capitals at all: cannot tell names from topics
     return any(m.group(0)[0].isupper() and mid(m.start()) for m in found)
+
+
+def _as_written(text: str, phrase: str) -> str:
+    """'harry potter' (as reviewers tag it) -> 'Harry Potter' when the traveller wrote it with capitals."""
+    out = []
+    for w in phrase.split():
+        m = re.search(r"\b" + re.escape(w) + r"\b", text, re.I)
+        out.append(m.group(0) if m and m.group(0)[0].isupper() else w)
+    return " ".join(out)
 
 
 def _singular(w: str) -> str:
@@ -730,6 +740,80 @@ def _centre(day: dict, fallback: tuple[float, float]) -> tuple[float, float]:
     return (sum(a for a, _ in pts) / len(pts), sum(b for _, b in pts) / len(pts)) if pts else fallback
 
 
+DURATION = {"sight": 75, "meal": 60, "prayer": 20, "rest": 45}  # minutes a stop usually takes
+
+
+def _hhmm(m: int) -> str:
+    m = max(0, min(m, 23 * 60 + 45))
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def _near_stop(day: dict, t: int, fallback: tuple[float, float]) -> tuple[float, float]:
+    """Where the traveller is around minute t: the closest non-prayer stop in time."""
+    pts = [(abs((_mins(st.get("time", "")) or 0) - t), st) for st in day["stops"] if st.get("kind") != "prayer" and st.get("lat") is not None]
+    if not pts:
+        return fallback
+    st = min(pts, key=lambda x: x[0])[1]
+    return st["lat"], st["lon"]
+
+
+def _fill_days(final: dict, trip: Trip) -> None:
+    """A day should not have long empty stretches: fill gaps with the best nearby place the tools found
+    (famous highlights and taste matches first), and make sure there is a lunch and a dinner."""
+    days = final.get("days", [])
+    used = {_key(st.get("name", "")) for d in days for st in d["stops"] if st.get("kind") != "prayer"}
+    target = 3 if trip.kids else 4
+    home = (trip.dest["lat"], trip.dest["lon"])
+    for day in days:
+        # Dhuhr, Asr and Maghrib every day, at the mosque nearest to where the traveller is then
+        have = {st.get("prayer") for st in day["stops"] if st.get("kind") == "prayer"}
+        for name in ("Dhuhr", "Asr", "Maghrib"):
+            t = _mins((day.get("prayer_times") or {}).get(name, ""))
+            if name in have or t is None:
+                continue
+            mosque = next(iter(trip.near("mosques", *_near_stop(day, t, home), 6000, 1)), None)
+            if mosque:
+                day["stops"].append(_fill_stop({"time": _hhmm(t), "kind": "prayer", "prayer": name, "ref": mosque["ref"],
+                                                "added_by": "rihla", "why": f"{name} at the mosque nearest to your other stops."}, mosque))
+        # lunch and dinner
+        for lo, hi, at, label in ((11 * 60 + 30, 14 * 60 + 30, 12 * 60 + 30, "lunch"), (18 * 60, 21 * 60, None, "dinner")):
+            if any(st.get("kind") == "meal" and lo <= (_mins(st.get("time", "")) or 0) <= hi for st in day["stops"]):
+                continue
+            if at is None:  # dinner after Maghrib
+                at = min(((_mins((day.get("prayer_times") or {}).get("Maghrib", "")) or 18 * 60) + 25), 20 * 60 + 30)
+            here = _near_stop(day, at, home)
+            options = [x for x in trip.near("halal", *here, 2000, 40) if _key(x["name"]) not in used]
+            food = min(options, key=lambda x: (RANK.get(x.get("halal_level"), 3), bool(x.get("alcohol")), x["distance_m"]), default=None)
+            if food:
+                day["stops"].append(_fill_stop({"time": _hhmm(at), "kind": "meal", "ref": food["ref"], "added_by": "rihla",
+                                                "why": f"A halal {label} close to your other stops."}, food))
+                used.add(_key(food["name"]))
+        # long empty stretches between 09:00 and 20:00
+        for _ in range(4):
+            if sum(1 for st in day["stops"] if st.get("kind") == "sight") >= target:
+                break
+            busy = sorted(((_mins(st.get("time", "")) or 0), (_mins(st.get("time", "")) or 0) + DURATION.get(st.get("kind"), 45))
+                          for st in day["stops"])
+            cursor, gaps = 9 * 60, []
+            for a, b in busy + [(20 * 60, 20 * 60)]:
+                if a - cursor >= 100:
+                    gaps.append((a - cursor, cursor))
+                cursor = max(cursor, b)
+            if not gaps:
+                break
+            start = (max(gaps)[1] + 10 + 14) // 15 * 15
+            here = _near_stop(day, start, home)
+            pool = [x for x in trip.near("sights", *here, 3000, 60) if _key(x["name"]) not in used and not x.get("halal_level")]
+            pick = min(pool, default=None, key=lambda x: x["distance_m"] - 900 * bool(x.get("topic")) - 700 * bool(x.get("popular"))
+                       - 500 * bool(x.get("because")) - 300 * bool(x.get("kids_ok") and trip.kids))
+            if not pick:
+                break
+            day["stops"].append(_fill_stop({"time": _hhmm(start), "kind": "sight", "ref": pick["ref"], "why": _why(pick),
+                                            "added_by": "rihla"}, pick))
+            used.add(_key(pick["name"]))
+        day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
+
+
 def _polish(final: dict, trip: Trip) -> None:
     """Fix what the model tends to get wrong: places that match what the traveller said they love must be in
     the plan (e.g. the Natural History Museum for kids who love dinosaurs), and a 'why' that describes a
@@ -760,6 +844,7 @@ def _polish(final: dict, trip: Trip) -> None:
             in_plan.add(_key(x["name"]))
             done |= words(x)
             added += 1
+    _fill_days(final, trip)
     # pray at the mosque nearest to where the family is at that time (the model tends to reuse one mosque all day)
     for d in days:
         for i, st in enumerate(d["stops"]):
@@ -795,7 +880,7 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
         day["date"] = prayers[i]["date"] if i < len(prayers) else None
         day["hijri"] = prayers[i]["hijri"] if i < len(prayers) else None
         day["prayer_times"] = prayers[i]["timings"] if i < len(prayers) else {}
-        stops = []
+        stops, prayed = [], set()
         for s in day.get("stops", []):
             p = trip.places.get(s.get("ref", ""))
             want = s.get("kind")
@@ -818,6 +903,9 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
             if s.get("kind") == "prayer" and day.get("prayer_times"):
                 # a prayer stop sits exactly at the prayer time, whatever time the model wrote
                 name = _prayer_name(s.get("time", ""), day["prayer_times"])
+                if name in prayed:
+                    continue  # one stop per prayer (the model sometimes lists two mosques for Dhuhr)
+                prayed.add(name)
                 s["time"], s["prayer"] = day["prayer_times"][name], name
                 if not s.get("why") or "prayer" not in s["why"].lower():
                     s["why"] = f"{name} prayer at the mosque closest to your previous stop."

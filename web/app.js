@@ -15,6 +15,21 @@ document.querySelectorAll('.quick button').forEach(function (b) {
   b.addEventListener('click', function () { form.destination.value = b.dataset.dest; form.destination.focus(); });
 });
 
+// example plans, made earlier with the same agent and live Qloo data: shown instantly
+document.querySelectorAll('.examples button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    $('#err').hidden = true;
+    fetch('/static/examples/' + b.dataset.ex + '.json').then(function (r) { if (!r.ok) throw new Error('Example not found'); return r.json(); })
+      .then(function (plan) {
+        var ex = plan.example || {};
+        form.destination.value = ex.destination || ''; form.travellers.value = ex.travellers || '';
+        form.tastes.value = ex.tastes || ''; form.days.value = String(ex.days || plan.days.length);
+        render(plan);
+      })
+      .catch(function (err) { $('#err').textContent = err.message; $('#err').hidden = false; });
+  });
+});
+
 form.addEventListener('submit', function (e) {
   e.preventDefault();
   var body = {
@@ -73,7 +88,8 @@ function render(plan) {
   $('#result').hidden = false;
   var n = 0, stops = 0, meals = 0, verified = 0;
   plan.days.forEach(function (d) { d.stops.forEach(function (s) { stops++; if (s.kind === 'meal') { meals++; if (s.halal_level === 'verified') verified++; } }); });
-  $('#sum').innerHTML = '<h2>' + esc(plan.title) + '</h2><p>' + esc(plan.summary) + '</p><div class="meta">' +
+  $('#sum').innerHTML = (plan.example ? '<p class="exnote">Example plan, made with the same agent and live Qloo data. Change anything above and press “Plan my trip” for your own.</p>' : '') +
+    '<h2>' + esc(plan.title) + '</h2><p>' + esc(plan.summary) + '</p><div class="meta">' +
     '<span>📍 ' + esc((plan.destination.name || '').split(',').slice(0, 3).join(',')) + '</span>' +
     '<span>' + plan.days.length + (plan.days.length === 1 ? ' day' : ' days') + ' · ' + stops + ' stops</span>' +
     '<span>🍽️ ' + meals + ' halal-aware meals' + (verified ? ' (' + verified + ' listed halal)' : '') + '</span>' +
