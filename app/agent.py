@@ -1212,6 +1212,7 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     await _meals_nearby(final, trip)
     _untangle(final)
     final["destination"] = trip.dest
+    final["timezone"] = next((p["timezone"] for p in prayers if p.get("timezone")), "")  # the plan's times are local there
     final["trace"] = trip.trace
     final["signals"] = list(trip.signals.values())
     final["audiences"] = ["Islam"] + (["Parents with young children"] if trip.kids else [])

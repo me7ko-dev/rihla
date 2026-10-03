@@ -16,7 +16,7 @@ METHOD = {"tr": 13, "sa": 4, "ae": 16, "eg": 5, "pk": 1, "in": 1, "ir": 7, "kw":
 
 
 async def times(lat: float, lon: float, date: dt.date, country_code: str = "") -> dict:
-    """{date, hijri, timings: {Fajr: 'HH:MM', ...}} for that day."""
+    """{date, hijri, timings: {Fajr: 'HH:MM', ...}, timezone} for that day (times are local to the place)."""
     method = METHOD.get((country_code or "").lower(), 3)
     key = f"{lat:.2f}:{lon:.2f}:{date.isoformat()}:{method}"
     hit = _cache.get(key)
@@ -33,6 +33,7 @@ async def times(lat: float, lon: float, date: dt.date, country_code: str = "") -
         "hijri": f'{h["day"]} {h["month"]["en"]} {h["year"]}',
         "timings": {p: d["timings"][p][:5] for p in PRAYERS} | {"Sunrise": d["timings"]["Sunrise"][:5]},
         "method": d.get("meta", {}).get("method", {}).get("name", ""),
+        "timezone": d.get("meta", {}).get("timezone", ""),
     }
     _cache[key] = (time.time(), out)
     return out

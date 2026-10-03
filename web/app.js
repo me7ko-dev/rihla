@@ -26,6 +26,96 @@ function navLinks(s) {
     (IS_APPLE ? link('apple', 'Apple Maps') : '') + link('google', 'Google Maps') + '</div>';
 }
 
+// trips are kept in this browser (localStorage), so the plan is still there on the day of the trip, even on weak internet
+var TRIPS = 'rihla:trips', MAX_TRIPS = 5;
+function loadTrips() {
+  // only whole trips: a broken entry must never stop the page
+  var ok = function (x) { return x && x.id && x.plan && x.plan.destination && Array.isArray(x.plan.days) && x.plan.days.length; };
+  try { var t = JSON.parse(localStorage.getItem(TRIPS) || '[]'); return Array.isArray(t) ? t.filter(ok) : []; } catch (e) { return []; }
+}
+function storeTrips(t) {
+  try { if (!t.length) return localStorage.removeItem(TRIPS); } catch (e) { return; }
+  // storage full: the oldest trips go first (private mode may refuse everything)
+  for (; t.length; t = t.slice(0, -1)) { try { localStorage.setItem(TRIPS, JSON.stringify(t)); return; } catch (e) { } }
+}
+function tripKey(p) { return (p.destination && p.destination.name) + '|' + (p.days[0] && p.days[0].date); }
+function saveTrip(plan, req) {
+  var p = {};
+  Object.keys(plan).forEach(function (k) { if (k !== 'llm_log') p[k] = plan[k]; });
+  var key = tripKey(p);  // the same place and dates planned again replaces the older plan
+  storeTrips([{ id: Date.now().toString(36), saved: Date.now(), req: req, plan: p }]
+    .concat(loadTrips().filter(function (x) { return tripKey(x.plan) !== key; })).slice(0, MAX_TRIPS));
+  showTrips();
+}
+// the date and minute of the day where the trip is, whatever time zone the phone is in
+function nowIn(tz) {
+  var o = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }, f;
+  try { f = new Intl.DateTimeFormat('en-US', tz ? Object.assign({ timeZone: tz }, o) : o); } catch (e) { f = new Intl.DateTimeFormat('en-US', o); }
+  var v = {};
+  f.formatToParts(new Date()).forEach(function (x) { v[x.type] = x.value; });
+  return { date: v.year + '-' + v.month + '-' + v.day, mins: (+v.hour % 24) * 60 + +v.minute };
+}
+// {day: index of today's day} during the trip, {inDays: n} before it, {past: true} after it
+function tripToday(plan) {
+  var first = plan.days[0] && plan.days[0].date, today = nowIn(plan.timezone).date;
+  if (!first) return {};
+  for (var i = 0; i < plan.days.length; i++) if (plan.days[i].date === today) return { day: i };
+  return today < first ? { inDays: Math.round((Date.parse(first) - Date.parse(today)) / 864e5) } : { past: true };
+}
+// "GMT+1" at that moment, for the phone (no tz) or for the trip
+function gmt(tz, at) {
+  try {
+    var o = { timeZoneName: 'shortOffset' };
+    if (tz) o.timeZone = tz;
+    var x = new Intl.DateTimeFormat('en-US', o).formatToParts(at).filter(function (x) { return x.type === 'timeZoneName'; })[0];
+    return x ? x.value : '';
+  } catch (e) { return ''; }
+}
+function dateRange(p) {
+  var a = p.days[0] && p.days[0].date, b = (p.days[p.days.length - 1] || {}).date || a;
+  if (!a) return '';
+  var f = function (s, o) { return new Date(s + 'T12:00:00Z').toLocaleDateString('en-GB', Object.assign({ timeZone: 'UTC' }, o)); };
+  if (a === b) return f(a, { day: 'numeric', month: 'short' });
+  return a.slice(0, 7) === b.slice(0, 7) ? f(a, { day: 'numeric' }) + '–' + f(b, { day: 'numeric', month: 'short' })
+    : f(a, { day: 'numeric', month: 'short' }) + ' – ' + f(b, { day: 'numeric', month: 'short' });
+}
+function showTrips() {
+  var box = $('#trips'), group = function (t) { return t.day != null ? 0 : t.inDays != null ? 1 : 2; };
+  if (!box) return;  // an older cached page without the strip
+  var list = loadTrips().map(function (x) { return { x: x, t: tripToday(x.plan) }; });
+  // today's trip first, then the next ones, then the past ones (newest first)
+  list.sort(function (a, b) { return group(a.t) - group(b.t) || (a.t.inDays || 0) - (b.t.inDays || 0) || b.x.saved - a.x.saved; });
+  box.hidden = !list.length;
+  box.innerHTML = list.length ? '<span class="trips-h">🧳 Saved on this device</span>' + list.map(function (o) {
+    var p = o.x.plan, t = o.t, city = esc((o.x.req && o.x.req.destination) || String(p.destination.name || '').split(',')[0]);
+    var when = t.day != null ? 'Day ' + p.days[t.day].day + ' is today' : t.inDays === 1 ? 'tomorrow' : t.inDays != null ? 'in ' + t.inDays + ' days' : '';
+    return '<span class="trip' + (t.day != null ? ' now' : '') + '"><button type="button" data-id="' + esc(o.x.id) + '">' + city +
+      (dateRange(p) ? ' · ' + esc(dateRange(p)) : '') + (when ? ' · <b>' + when + '</b>' : '') + '</button>' +
+      '<button type="button" class="forget" data-forget="' + esc(o.x.id) + '" title="Forget this trip" aria-label="Forget the trip to ' + city + '">×</button></span>';
+  }).join('') : '';
+}
+function openTrip(x) {
+  var r = x.req || {};
+  ['destination', 'travellers', 'tastes', 'language', 'start'].forEach(function (k) { if (r[k]) form[k].value = r[k]; });
+  if (r.days) form.days.value = String(r.days);
+  $('#err').hidden = true;
+  render(x.plan);
+  // during the trip: straight to today, on the map and in the list
+  var t = tripToday(x.plan);
+  if (t.day != null) {
+    var b = document.querySelector('#daybar button[data-d="' + t.day + '"]'), card = document.querySelectorAll('#days .day')[t.day];
+    if (b) b.click();
+    if (card) card.scrollIntoView({ behavior: 'smooth' });
+  }
+}
+if ($('#trips')) $('#trips').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.forget) { storeTrips(loadTrips().filter(function (x) { return x.id !== b.dataset.forget; })); showTrips(); return; }
+  var x = loadTrips().filter(function (x) { return x.id === b.dataset.id; })[0];
+  if (x) openTrip(x);
+});
+showTrips();
+
 // start date: one week from today
 var d = new Date(Date.now() + 7 * 864e5);
 form.start.value = d.toISOString().slice(0, 10);
@@ -98,14 +188,21 @@ form.addEventListener('submit', function (e) {
       }
       return pump();
     })
-    .then(function (plan) { finish(); render(plan); })
+    .then(function (plan) {
+      finish();
+      try { saveTrip(plan, body); } catch (e) { }  // saving is a bonus: the plan is shown whatever happens
+      render(plan);
+    })
     .catch(function (err) { finish(); $('#err').textContent = err.message; $('#err').hidden = false; });
 });
 
 function render(plan) {
   $('#result').hidden = false;
   $('#how').hidden = true;
-  var n = 0, stops = 0, meals = 0, verified = 0;
+  var n = 0, stops = 0, meals = 0, verified = 0, today = tripToday(plan);
+  // the plan's times are local to the trip: say so when the phone is in another time zone
+  var at = new Date(((plan.days[0] && plan.days[0].date) || new Date().toISOString().slice(0, 10)) + 'T12:00:00Z');
+  var there = plan.timezone ? gmt(plan.timezone, at) : '', local = there && there !== gmt(null, at) ? there : '';
   plan.days.forEach(function (d) { d.stops.forEach(function (s) { stops++; if (s.kind === 'meal') { meals++; if (s.halal_level === 'verified') verified++; } }); });
   $('#sum').innerHTML = (plan.fallback ? '<p class="exnote">The AI writer was busy, so Rihla assembled this plan itself from the same Qloo results.</p>' : '') +
     (plan.example ? '<p class="exnote">Example plan, made with the same agent and live Qloo data. Change anything above and press “Plan my trip” for your own.</p>' : '') +
@@ -113,6 +210,7 @@ function render(plan) {
     '<span>📍 ' + esc((plan.destination.name || '').split(',').slice(0, 3).join(',')) + '</span>' +
     '<span>' + plan.days.length + (plan.days.length === 1 ? ' day' : ' days') + ' · ' + stops + ' stops</span>' +
     '<span>🍽️ ' + meals + ' halal-aware meals' + (verified ? ' (' + verified + ' listed halal)' : '') + '</span>' +
+    (local ? '<span title="' + esc(plan.timezone) + '">🕒 Local times · ' + esc(local) + '</span>' : '') +
     (plan.seconds ? '<span>⏱️ planned in ' + plan.seconds + ' s</span>' : '') + '</div>' +
     ((plan.signals && plan.signals.length) || (plan.audiences && plan.audiences.length) ?
       '<div class="taste"><b>Your Qloo taste profile</b>' +
@@ -120,7 +218,8 @@ function render(plan) {
       (plan.audiences || []).map(function (x) { return '<span class="aud">' + esc(x) + '</span>'; }).join('') + '</div>' : '');
   var h = '';
   plan.days.forEach(function (day, di) {
-    h += '<article class="card day"><div class="day-h"><div><h3>Day ' + day.day + ' · <span dir="auto">' + esc(day.theme) + '</span></h3>' +
+    h += '<article class="card day' + (today.day === di ? ' today' : '') + '"><div class="day-h"><div><h3>' + (today.day === di ? '<span class="today-tag">Today</span> ' : '') +
+      'Day ' + day.day + ' · <span dir="auto">' + esc(day.theme) + '</span></h3>' +
       '<div class="date">' + esc(fmtDate(day.date)) + (day.hijri ? ' · ' + esc(day.hijri) + ' AH' : '') + '</div></div></div>';
     if (day.prayer_times) {
       h += '<div class="ptimes">' + ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'].map(function (p) {
