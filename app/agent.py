@@ -670,15 +670,20 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
     msgs = [{"role": "system", "content": SYSTEM.replace("{language}", language)},
             {"role": "user", "content": "Plan this trip:\n" + json.dumps(user, ensure_ascii=False)}]
     # 1) research: the model calls the tools it needs until it says it is ready
+    model_down = False
     for step in range(MAX_STEPS):
         try:
             r = await llm.chat(messages=msgs, tools=TOOLS, temperature=0.4, max_tokens=4000, tool_choice="auto")
         except BadRequestError as e:
             # Groq rejects a malformed tool call outright; tell the model and let it try again
             if "tool_use_failed" not in str(e):
-                raise
+                model_down = True
+                break
             msgs.append({"role": "user", "content": "Your last tool call had invalid arguments: " + str(e)[:300] + " Try again."})
             continue
+        except RuntimeError:  # every language model failed
+            model_down = True
+            break
         m = r.choices[0].message
         if not m.tool_calls:
             break
@@ -704,6 +709,8 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
                                "found": found, "note": note})
             await emit({"type": "found", "id": tc.id, "n": found})
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": _fit(result, 16000)})
+    if model_down and not trip.signals and not trip.pool["sights"]:
+        await _research_without_model(trip, tastes, emit)
     # 2) make sure every day's area has halal food and a mosque, even if the model skipped those tools
     extra = await _fill_gaps(trip, days, emit)
     if not trip.places:
@@ -712,18 +719,25 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
     await emit({"type": "step", "text": "Building your day-by-day plan around the prayer times"})
     msgs.append({"role": "user", "content": (("More places I looked up for you: " + _fit(extra, 12000) + "\n\n")
                                              if extra else "") + COMPOSE.replace("{language}", language)})
-    final, raw = None, ""
-    for _ in range(2):
-        r = await llm.chat(think=COMPOSE_THINK, messages=msgs, temperature=0.3, max_tokens=16000, response_format={"type": "json_object"})
-        raw = r.choices[0].message.content or ""
-        final = _json(raw)
+    final = None
+    for _ in range(0 if model_down else 2):
+        try:
+            r = await llm.chat(think=COMPOSE_THINK, messages=msgs, temperature=0.3, max_tokens=16000,
+                               response_format={"type": "json_object"})
+        except (RuntimeError, BadRequestError):
+            break
+        final = _json(r.choices[0].message.content or "")
         if final and final.get("days"):
             break
         msgs.append({"role": "user", "content": "That was not valid JSON with a non-empty days array. Output only the JSON."})
-    if not final or not final.get("days"):
-        raise RuntimeError(f"The planner did not finish a plan (finish_reason={r.choices[0].finish_reason}, {len(raw)} chars)")
-    trip.trace.append({"tool": "compose_plan", "args": {}, "found": sum(len(d.get("stops", [])) for d in final["days"]),
-                       "note": "itinerary written, every stop checked against the tool results"})
+    if final and final.get("days"):
+        trip.trace.append({"tool": "compose_plan", "args": {}, "found": sum(len(d.get("stops", [])) for d in final["days"]),
+                           "note": "itinerary written, every stop checked against the tool results"})
+    else:
+        final = _plan_without_model(trip, days, start)
+        final["fallback"] = True
+        trip.trace.append({"tool": "compose_plan", "args": {}, "found": sum(len(d["stops"]) for d in final["days"]),
+                           "note": "the AI writer was unavailable: Rihla assembled the plan from the same Qloo results"})
     trip.model = llm.used
     trip.llm_log = llm.log
     trip.absorb_osm(await trip.osm(0.05))  # more mosques and halal food for the checks below, if the map is ready
@@ -731,6 +745,56 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
     result["seconds"] = round(time.time() - t0)
     result["qloo_calls"] = {k: qloo.stats[k] - q0[k] for k in q0}
     return result
+
+
+async def _research_without_model(trip: Trip, tastes: str, emit) -> None:
+    """The language model is down: run the research tools directly — names the traveller wrote become taste
+    signals, then places, halal food and mosques around the destination."""
+    names = list(dict.fromkeys(m.strip(" ,.;") for m in
+                               re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)", tastes or "")))
+    steps = [("taste_entities", {"items": [{"query": n, "kind": None} for n in names[:6]]})] if names else []
+    steps.append(("taste_places", {"categories": ["museum", "landmark", "park"] + (["family"] if trip.kids else []),
+                                   "interest_refs": []}))
+    for i, (name, args) in enumerate(steps):
+        await emit({"type": "step", "id": f"auto{i}", "text": _step_text(name, args)})
+        result, note = await _safe_tool(trip, name, args)
+        trip.trace.append({"tool": name, "args": args, "found": _count(result), "note": note + " (run by Rihla)"})
+        await emit({"type": "found", "id": f"auto{i}", "n": _count(result)})
+
+
+def _plan_without_model(trip: Trip, days: int, start: dt.date) -> dict:
+    """The language model could not write the plan: the code picks the best places per day from the same
+    tool results (asked-for places and topic matches first, then taste matches and famous highlights),
+    grouped by area; meals and prayers are added by the usual checks."""
+    def score(x: dict) -> float:
+        return (3 * bool(x.get("requested")) + 2 * bool(x.get("topic")) + bool(x.get("because")) + bool(x.get("popular"))
+                + 0.5 * bool(trip.kids and x.get("kids_ok")) + 0.3 * bool(x.get("description")))
+    cands = sorted((x for x in trip.pool["sights"].values() if not x.get("halal_level")), key=score, reverse=True)
+    per_day = 3 if trip.kids else 4
+    picked, spots = [], []
+    for x in cands:  # skip places inside one already picked
+        if all(osm.distance_m(x["lat"], x["lon"], a, b) > 250 for a, b in spots):
+            picked.append(x)
+            spots.append((x["lat"], x["lon"]))
+        if len(picked) >= per_day * days:
+            break
+    centres = _centres([(x["lat"], x["lon"]) for x in picked], days) or [(trip.dest["lat"], trip.dest["lon"])]
+    groups: list[list[dict]] = [[] for _ in centres]
+    for x in picked:
+        i = min(range(len(centres)), key=lambda i: osm.distance_m(x["lat"], x["lon"], *centres[i]))
+        groups[i].append(x)
+    city = trip.dest.get("name", "").split(",")[0]
+    out = {"title": f"{days} day{'s' if days > 1 else ''} in {city}", "tips": [],
+           "summary": f"Places in {city} that match your taste, halal food nearby and every day built around the prayers."}
+    out["days"] = []
+    for i in range(days):
+        date = (start + dt.timedelta(days=i)).isoformat()
+        group = sorted((x for x in (groups[i] if i < len(groups) else []) if _opening(x, date) is not False),
+                       key=score, reverse=True)[:per_day]
+        slots = ["09:30", "11:00", "15:00", "16:30"]
+        out["days"].append({"day": i + 1, "theme": f"{group[0]['name']} and around" if group else city,
+                            "stops": [{"time": t, "kind": "sight", "ref": x["ref"], "why": _why(x)} for t, x in zip(slots, group)]})
+    return out
 
 
 def _mins(hhmm: str) -> int | None:

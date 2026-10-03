@@ -89,7 +89,8 @@ function render(plan) {
   $('#how').hidden = true;
   var n = 0, stops = 0, meals = 0, verified = 0;
   plan.days.forEach(function (d) { d.stops.forEach(function (s) { stops++; if (s.kind === 'meal') { meals++; if (s.halal_level === 'verified') verified++; } }); });
-  $('#sum').innerHTML = (plan.example ? '<p class="exnote">Example plan, made with the same agent and live Qloo data. Change anything above and press “Plan my trip” for your own.</p>' : '') +
+  $('#sum').innerHTML = (plan.fallback ? '<p class="exnote">The AI writer was busy, so Rihla assembled this plan itself from the same Qloo results.</p>' : '') +
+    (plan.example ? '<p class="exnote">Example plan, made with the same agent and live Qloo data. Change anything above and press “Plan my trip” for your own.</p>' : '') +
     '<h2 dir="auto">' + esc(plan.title) + '</h2><p dir="auto">' + esc(plan.summary) + '</p><div class="meta">' +
     '<span>📍 ' + esc((plan.destination.name || '').split(',').slice(0, 3).join(',')) + '</span>' +
     '<span>' + plan.days.length + (plan.days.length === 1 ? ' day' : ' days') + ' · ' + stops + ' stops</span>' +
