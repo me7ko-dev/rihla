@@ -133,6 +133,44 @@ def test_tool_results_are_trimmed_not_cut():
     assert len(text) <= 2000 and json.loads(text)["park"]
 
 
+# ---------- the model's plan is checked before it is used ----------
+def test_stray_words_in_the_model_plan_are_dropped():
+    stop = {"time": "09:00", "kind": "sight", "ref": "qloo:1", "why": "Dinosaurs"}
+    final = {"title": "t", "days": [{"day": 1, "stops": [stop, "oops"]}, "tips"], "tips": "Bring water"}  # seen 04.10
+    assert agent._usable(final, 1)
+    assert final["days"] == [{"day": 1, "stops": [stop]}] and final["tips"] == ["Bring water"]
+
+
+@pytest.mark.parametrize("final, days", [
+    (None, 1), ([{"day": 1}], 1), ({"days": "Day 1"}, 1), ({"days": []}, 1),
+    ({"days": [{"day": 1, "stops": []}]}, 1),                     # a day without stops
+    ({"days": [{"day": 1, "stops": [{"time": "09:00"}]}]}, 2),    # one day of two: ask again or plan without the model
+])
+def test_unusable_model_plans_are_refused(final, days):
+    assert not agent._usable(final, days)
+
+
+def test_tips_filed_inside_a_day_are_lifted():
+    final = {"days": [{"day": 1, "stops": [{"time": "09:00"}], "tips": ["Carry a prayer mat", 3]}]}  # seen 04.10
+    assert agent._usable(final, 1) and final["tips"] == ["Carry a prayer mat"] and "tips" not in final["days"][0]
+
+
+@pytest.mark.parametrize("tips, kept", [
+    ("Buy a Museum Pass. Wear comfortable shoes.", ["Buy a Museum Pass. Wear comfortable shoes."]),  # one text, seen 04.10
+    ("Buy a Museum Pass\n- \nWear comfortable shoes", ["Buy a Museum Pass", "-", "Wear comfortable shoes"]),
+    ("Buy a Museum Pass; wear comfortable shoes", ["Buy a Museum Pass", "wear comfortable shoes"]),
+    (None, []), (7, []),
+])
+def test_tips_written_as_text(tips, kept):
+    final = {"days": [{"day": 1, "stops": [{"time": "09:00"}]}], "tips": tips}
+    assert agent._usable(final, 1) and final["tips"] == kept
+
+
+def test_extra_days_are_cut():
+    final = {"days": [{"day": n, "stops": [{"time": "09:00"}]} for n in (1, 2, 3)]}
+    assert agent._usable(final, 2) and [d["day"] for d in final["days"]] == [1, 2]
+
+
 # ---------- the web app ----------
 def test_keys_never_leave_the_server(monkeypatch):
     monkeypatch.setattr(main, "_SECRETS", ["hack_secret_value_123"])

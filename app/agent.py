@@ -9,6 +9,7 @@ the plan is invented.
 """
 import datetime as dt
 import json
+import logging
 
 import asyncio
 import re
@@ -19,6 +20,7 @@ from openai import APIError, AsyncOpenAI, BadRequestError, RateLimitError
 
 from . import config, halal, osm, prayer, qloo
 
+log = logging.getLogger("rihla")
 MAX_STEPS = 6
 COMPOSE_THINK = False  # Nemotron's reasoning on the final plan: ~70 s instead of ~20 s, little better in tests
 AREA_M = 3000  # one OpenStreetMap area around the destination (seed_cities.py uses the same)
@@ -102,6 +104,8 @@ TOOLS = [
 PLAN_SCHEMA = {"type": "object", "properties": {
     "title": {"type": "string"},
     "summary": {"type": "string", "description": "2-3 sentences: who this trip is for and its idea"},
+    # tips before days: written after the long days array, the model often lost them in the closing brackets
+    "tips": {"type": "array", "items": {"type": "string"}},
     "days": {"type": "array", "items": {"type": "object", "properties": {
         "day": {"type": "integer"}, "theme": {"type": "string"},
         "stops": {"type": "array", "items": {"type": "object", "properties": {
@@ -110,8 +114,7 @@ PLAN_SCHEMA = {"type": "object", "properties": {
             "ref": {"type": "string", "description": "exact ref from a tool result"},
             "why": {"type": "string"}},
             "required": ["time", "kind", "ref", "why"]}}},
-        "required": ["day", "theme", "stops"]}},
-    "tips": {"type": "array", "items": {"type": "string"}}},
+        "required": ["day", "theme", "stops"]}}},
     "required": ["title", "summary", "days"]}
 COMPOSE = ("You have gathered enough. Now write the final itinerary as ONE JSON object, no prose, with this shape: "
            + json.dumps(PLAN_SCHEMA) + " Use only refs you received from tools. Write all text in {language}.")
@@ -166,6 +169,23 @@ def _json(text: str) -> dict | None:
             except json.JSONDecodeError:
                 return None
     return None
+
+
+def _usable(final, days: int) -> bool:
+    """Keep only well-formed days and stops (the model sometimes slips a stray word into an array, like
+    '"days": [{...}, "tips"]') and say whether every day of the trip is still there, each with stops."""
+    if not isinstance(final, dict) or not isinstance(final.get("days"), list):
+        return False
+    final["days"] = [d for d in final["days"] if isinstance(d, dict) and isinstance(d.get("stops"), list)][:days]
+    for d in final["days"]:
+        d["stops"] = [s for s in d["stops"] if isinstance(s, dict)]
+    tips = final.get("tips")
+    if not isinstance(tips, list):  # the model sometimes files the tips inside a day, or writes them as one text
+        tips = next((d.pop("tips") for d in final["days"] if isinstance(d.get("tips"), list)), tips)
+    if isinstance(tips, str):
+        tips = re.split(r"\s*(?:\n|;\s)\s*", tips)
+    final["tips"] = [t.strip() for t in tips if isinstance(t, str) and t.strip()] if isinstance(tips, list) else []
+    return len(final["days"]) == days and all(d["stops"] for d in final["days"])
 
 
 class Trip:
@@ -735,11 +755,13 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
         except (RuntimeError, BadRequestError):
             break
         final = _json(r.choices[0].message.content or "")
-        if final and final.get("days"):
+        if _usable(final, days):
             break
-        msgs.append({"role": "user", "content": "That was not valid JSON with a non-empty days array. Output only the JSON."})
-    if final and final.get("days"):
-        trip.trace.append({"tool": "compose_plan", "args": {}, "found": sum(len(d.get("stops", [])) for d in final["days"]),
+        final = None
+        msgs.append({"role": "user", "content": f"That was not valid JSON with a days array of {days} day object(s), "
+                                                "each with its stops. Output only the JSON."})
+    if final:
+        trip.trace.append({"tool": "compose_plan", "args": {}, "found": sum(len(d["stops"]) for d in final["days"]),
                            "note": "itinerary written, every stop checked against the tool results"})
     else:
         final = _plan_without_model(trip, days, start)
@@ -749,7 +771,18 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
     trip.model = llm.used
     trip.llm_log = llm.log
     trip.absorb_osm(await trip.osm(0.05))  # more mosques and halal food for the checks below, if the map is ready
-    result = await _enrich(final, trip, prayers)
+    try:
+        result = await _enrich(final, trip, prayers)
+    except Exception:
+        if final.get("fallback"):
+            raise
+        # whatever the model wrote, the traveller still gets a plan
+        log.exception("the model's plan could not be used")
+        final = _plan_without_model(trip, days, start)
+        final["fallback"] = True
+        trip.trace.append({"tool": "compose_plan", "args": {}, "found": sum(len(d["stops"]) for d in final["days"]),
+                           "note": "the AI writer's plan could not be used: Rihla assembled the plan from the same Qloo results"})
+        result = await _enrich(final, trip, prayers)
     result["seconds"] = round(time.time() - t0)
     result["qloo_calls"] = {k: qloo.stats[k] - q0[k] for k in q0}
     return result
