@@ -82,6 +82,35 @@ def test_no_overlapping_stops_and_prayers_stay_put():
     assert times["A"] == "11:00" and times["B"] == "12:15" and times["Mosque"] == "12:46"
 
 
+def _at(km_north: float) -> dict:
+    return {"lat": 51.5 + km_north / 111.2, "lon": -0.12}   # London, km_north km (straight line) up the map
+
+
+@pytest.mark.parametrize("km_north, kids, minutes", [
+    (0.923, False, 16), (0.923, True, 20),     # 1.2 km of streets: 16 min for adults, 20 min with young children
+    (1.38, False, 24),                         # 1.8 km of streets: still a walk for adults (24 min)...
+    (1.38, True, 20),                          # ...but too far for small children (30 min): metro or taxi
+    (5.0, False, 34),                          # 6.5 km of streets: metro or taxi
+])
+def test_travel_time_between_stops(km_north, kids, minutes):
+    assert abs(agent._travel_min(_at(0), _at(km_north), kids) - minutes) <= 1
+
+
+def test_next_stop_waits_for_the_walk():
+    def day():
+        return {"days": [{"stops": [
+            {"time": "10:00", "kind": "sight", "name": "A", **_at(0)},
+            {"time": "11:15", "kind": "meal", "name": "B", **_at(0.6)},      # 0.78 km of streets
+            {"time": "14:00", "kind": "sight", "name": "C", **_at(0.9)},     # enough time already: stays
+            {"time": "12:46", "kind": "prayer", "name": "Mosque", **_at(3)},  # prayers keep their time
+        ]}]}
+    for kids, lunch in ((False, "11:25"), (True, "11:30")):              # 10 min on foot, 13 min with small children
+        final = day()
+        agent._untangle(final, kids)
+        times = {s["name"]: s["time"] for s in final["days"][0]["stops"]}
+        assert times == {"A": "10:00", "B": lunch, "C": "14:00", "Mosque": "12:46"}
+
+
 class _Trip:
     dest = {"lat": 48.86, "lon": 2.35}
 

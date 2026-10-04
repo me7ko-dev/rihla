@@ -7,7 +7,11 @@ var LEVEL = { verified: 'Listed halal', likely: 'Likely halal', unknown: 'Ask ab
 var DAYCOL = ['#0F4C45', '#C2643F', '#2F6FB3', '#7A4FB3'];
 // Apple Maps only where it is the phone's own map app (iPhone, iPad, Mac); Google Maps everywhere
 var IS_APPLE = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
-var WALK_KM = 1.8;
+// on foot up to `km` of streets at `pace` km a minute (4.5 km/h); young children walk slower (1.8 km takes them
+// at least 30 minutes), so their walks stop at 1.2 km — the server plans the day with the same numbers
+var WALK = { adults: { km: 1.8, pace: 0.075 }, kids: { km: 1.2, pace: 0.06 } };
+// the server adds this Qloo audience when a child is 12 or younger, or there is a baby
+function youngKids(plan) { return (plan.audiences || []).indexOf('Parents with young children') >= 0; }
 
 function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
@@ -199,7 +203,7 @@ form.addEventListener('submit', function (e) {
 function render(plan) {
   $('#result').hidden = false;
   $('#how').hidden = true;
-  var n = 0, stops = 0, meals = 0, verified = 0, today = tripToday(plan);
+  var n = 0, stops = 0, meals = 0, verified = 0, today = tripToday(plan), kids = youngKids(plan), rule = kids ? WALK.kids : WALK.adults;
   // the plan's times are local to the trip: say so when the phone is in another time zone
   var at = new Date(((plan.days[0] && plan.days[0].date) || new Date().toISOString().slice(0, 10)) + 'T12:00:00Z');
   var there = plan.timezone ? gmt(plan.timezone, at) : '', local = there && there !== gmt(null, at) ? there : '';
@@ -233,10 +237,10 @@ function render(plan) {
       s._mode = null;
       if (prev && s.lat != null) {
         var km = distKm(prev, s) * 1.3;
-        s._mode = km <= WALK_KM ? 'walk' : 'transit';
+        s._mode = km <= rule.km ? 'walk' : 'transit';
         if (km >= 0.15) {
           var leg = '<a href="' + esc(mapsUrl(IS_APPLE ? 'apple' : 'google', s, s._mode, prev)) + '" target="_blank" rel="noopener" title="See this leg in ' + (IS_APPLE ? 'Apple Maps' : 'Google Maps') + '">';
-          if (km <= WALK_KM) { walk += km; list += '<li class="leg">' + leg + '🚶 ' + Math.max(2, Math.round(km / 0.075)) + ' min walk</a></li>'; }
+          if (km <= rule.km) { walk += km; list += '<li class="leg">' + leg + '🚶 ' + Math.max(2, Math.round(km / rule.pace)) + ' min walk</a></li>'; }
           else { rides++; list += '<li class="leg">' + leg + '🚇 ' + km.toFixed(1) + ' km · metro or taxi</a></li>'; }
         }
       }
@@ -259,7 +263,7 @@ function render(plan) {
         '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + '</h4><p dir="auto">' + esc(s.why) + '</p>' +
         (badges ? '<div class="badges">' + badges + '</div>' : '') + '</div>' + img + '</div>' + navLinks(s) + '</li>';
     });
-    h += '<div class="move">≈ ' + walk.toFixed(1) + ' km on foot' + (rides ? ' · ' + rides + (rides === 1 ? ' ride' : ' rides') + ' by metro or taxi' : '') + '</div>';
+    h += '<div class="move">≈ ' + walk.toFixed(1) + ' km on foot' + (kids ? ' at children’s pace' : '') + (rides ?' · ' + rides + (rides === 1 ? ' ride' : ' rides') + ' by metro or taxi' : '') + '</div>';
     h += '<ol class="stops">' + list + '</ol></article>';
   });
   if (plan.tips && plan.tips.length) h += '<section class="card tips"><h3>Good to know</h3><ul>' + plan.tips.map(function (t) { return '<li dir="auto">' + esc(t) + '</li>'; }).join('') + '</ul></section>';

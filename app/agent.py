@@ -1042,21 +1042,40 @@ def _fill_days(final: dict, trip: Trip) -> None:
         day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
 
 
-def _untangle(final: dict) -> None:
-    """No two stops at the same time: each stop starts when the previous one is over (prayers stay at their
-    exact times; a visit that would start during a prayer starts after it)."""
+# on foot up to this many street km, at this many km a minute: adults 4.5 km/h; young children walk slower
+# (1.8 km takes them at least 30 minutes), so their walks stop at 1.2 km. The web page uses the same numbers.
+WALK = {False: (1.8, 0.075), True: (1.2, 0.06)}
+
+
+def _travel_min(a: dict, b: dict, kids: bool = False) -> int:
+    """Minutes from stop a to stop b: on foot up to the walking limit, farther by metro or taxi (about 15 minutes
+    to get going, then 3 minutes a km). Streets are about 30% longer than the straight line."""
+    if a.get("lat") is None or b.get("lat") is None:
+        return 0
+    km = osm.distance_m(a["lat"], a["lon"], b["lat"], b["lon"]) * 1.3 / 1000
+    longest, pace = WALK[kids]
+    return round(km / pace) if km <= longest else round(15 + 3 * km)
+
+
+def _untangle(final: dict, kids: bool = False) -> None:
+    """No two stops at the same time, and time to get from one to the next: each stop starts when the previous
+    one is over and the walk or ride is done (prayers stay at their exact times; a visit that would start during
+    a prayer starts after it)."""
     for day in final.get("days", []):
         stops = sorted(day["stops"], key=lambda st: (_mins(st.get("time", "")) or 0, st.get("kind") != "prayer"))
-        free = 0
+        free, last = 0, None  # when and where the traveller is free again
         for st in stops:
             t = _mins(st.get("time", "")) or 0
             if st.get("kind") == "prayer":
-                free = max(free, t + DURATION["prayer"])
+                ends = t + (45 if st.get("jumuah") else DURATION["prayer"])
+                if ends >= free:
+                    free, last = ends, st
                 continue
-            if t < free:
-                t = (free + 4) // 5 * 5
+            ready = free + (_travel_min(last, st, kids) if last else 0)
+            if t < ready:
+                t = (ready + 4) // 5 * 5
                 st["time"] = _hhmm(t)
-            free = t + DURATION.get(st.get("kind"), 45)
+            free, last = t + DURATION.get(st.get("kind"), 45), st
         day["stops"] = sorted(stops, key=lambda st: _mins(st.get("time", "")) or 0)
 
 
@@ -1243,7 +1262,7 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     _route(final)
     _check_hours(final, trip, drop=False)
     await _meals_nearby(final, trip)
-    _untangle(final)
+    _untangle(final, trip.kids)
     final["destination"] = trip.dest
     final["timezone"] = next((p["timezone"] for p in prayers if p.get("timezone")), "")  # the plan's times are local there
     final["trace"] = trip.trace
