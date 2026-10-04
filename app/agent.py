@@ -25,7 +25,12 @@ MAX_STEPS = 6
 COMPOSE_THINK = False  # Nemotron's reasoning on the final plan: ~70 s instead of ~20 s, little better in tests
 AREA_M = 3000  # one OpenStreetMap area around the destination (seed_cities.py uses the same)
 EMPTY_AREA = {"halal": [], "mosques": [], "sights": []}
-KIDS = re.compile(r"\b(kids?|child|children|sons?|daughters?|bab(y|ies)|toddlers?|boys?|girls?|famil(y|ies))\b", re.I)
+KIDS = re.compile(r"\b(kids?|child|children|sons?|daughters?|bab(y|ies)|toddlers?|boys?|girls?|famil(y|ies)"
+                  r"|деца|дете(то)?|бебе(та)?|син|дъщеря|семейство)\b", re.I)
+BABY = re.compile(r"\b(bab(y|ies)|toddlers?|infants?|бебе(та)?)\b", re.I)
+# "a 4-year-old", "6 years old", "aged 3", "4-годишно": a child's age even without a word like "kids"
+AGE = re.compile(r"\b(\d{1,2})\s*-?\s*(?:years?|yrs?)\s*-?\s*olds?\b|\b(\d{1,2})\s*y/?o\b|\bage[ds]?\s*(?:of\s*)?(\d{1,2})\b"
+                 r"|\b(\d{1,2})\s*-?\s*годишн", re.I)
 RANK = {"verified": 0, "likely": 1, "unknown": 2}
 # "Orhan Pamuk's novels" -> "Orhan Pamuk", "Pixar movies" -> "Pixar"
 GENERIC_WORDS = re.compile(r"'s\b|\b(movies?|films?|novels?|books?|series|shows?|tv|music|songs?|albums?|video ?games?|games?|"
@@ -204,8 +209,9 @@ class Trip:
         self.entities: dict[str, dict] = {}  # every Qloo entity seen in taste_entities, by id
         self.signals: dict[str, str] = {}    # the traveller's taste signals: Qloo id -> name
         ages = [int(a) for a in re.findall(r"\b(\d{1,2})\b", travellers or "")]
+        stated = [int(next(g for g in m if g)) for m in AGE.findall(travellers or "")]
         self.kids = bool(KIDS.search(travellers or "")) and (not ages or min(ages) <= 12) or \
-            bool(re.search(r"\b(bab(y|ies)|toddlers?|infants?)\b", travellers or "", re.I))
+            bool(BABY.search(travellers or "")) or any(a <= 12 for a in stated)
         self.audiences = [qloo.AUDIENCES["muslim"]] + ([qloo.AUDIENCES["kids"]] if self.kids else [])
         self.osm_task: asyncio.Task | None = None
         self._osm: dict | None = None

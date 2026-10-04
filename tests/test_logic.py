@@ -65,6 +65,10 @@ def test_keywords_keep_the_travellers_capitals():
 @pytest.mark.parametrize("travellers, kids", [
     ("Family of four, kids aged 7 and 11", True), ("Mother and daughter (16)", False),
     ("Couple with a baby", True), ("Couple in their 30s", False),
+    ("Parents with a 4-year-old", True), ("Me and my 6 years old", True), ("Two adults and a 3 yo", True),  # no "kids"
+    ("Couple, married 3 years", False), ("Grandparents, 70 years old", False), ("Two adults aged 35 and 38", False),
+    ("Семейство с деца на 4 и 6 години", True), ("Майка с бебе", True), ("Родители с 5-годишно", True),
+    ("Двама възрастни", False),
 ])
 def test_young_children_audience(travellers, kids):
     assert agent.Trip({"lat": 0, "lon": 0}, travellers, "").kids is kids
