@@ -3,3 +3,6 @@ uvicorn>=0.30
 httpx>=0.27
 openai>=1.40
 pydantic>=2
+tzfpy>=1.0
+tzdata
+hijridate>=2.5

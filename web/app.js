@@ -211,6 +211,7 @@ function render(plan) {
   $('#sum').innerHTML = (plan.fallback ? '<p class="exnote">The AI writer was busy, so Rihla assembled this plan itself from the same Qloo results.</p>' : '') +
     (plan.example ? '<p class="exnote">Example plan, made with the same agent and live Qloo data. Change anything above and press “Plan my trip” for your own.</p>' : '') +
     '<h2 dir="auto">' + esc(plan.title) + '</h2><p dir="auto">' + esc(plan.summary) + '</p><div class="meta">' +
+    (plan.ramadan ? '<span>🌙 Ramadan: iftar and Taraweeh planned</span>' : '') +
     '<span>📍 ' + esc((plan.destination.name || '').split(',').slice(0, 3).join(',')) + '</span>' +
     '<span>' + plan.days.length + (plan.days.length === 1 ? ' day' : ' days') + ' · ' + stops + ' stops</span>' +
     '<span>🍽️ ' + meals + ' halal-aware meals' + (verified ? ' (' + verified + ' listed halal)' : '') + '</span>' +
@@ -225,6 +226,9 @@ function render(plan) {
     h += '<article class="card day' + (today.day === di ? ' today' : '') + '"><div class="day-h"><div><h3>' + (today.day === di ? '<span class="today-tag">Today</span> ' : '') +
       'Day ' + day.day + ' · <span dir="auto">' + esc(day.theme) + '</span></h3>' +
       '<div class="date">' + esc(fmtDate(day.date)) + (day.hijri ? ' · ' + esc(day.hijri) + ' AH' : '') + '</div></div></div>';
+    // a fasting day: from Fajr (end of suhoor) to Maghrib (iftar); an Eid day: the festival prayer in the morning
+    if (day.ramadan && day.prayer_times) h += '<div class="holy">🌙 <b>Ramadan</b> · fasting from Fajr ' + esc(day.prayer_times.Fajr) + ' to Maghrib ' + esc(day.prayer_times.Maghrib) + ' — no food stops until iftar</div>';
+    if (day.eid) h += '<div class="holy eid">🎉 <b>' + esc(day.eid) + '</b> · the Eid prayer is early in the morning at large mosques — ask locally for the time</div>';
     if (day.prayer_times) {
       h += '<div class="ptimes">' + ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'].map(function (p) {
         return day.prayer_times[p] ? '<span>' + p + '<b>' + esc(day.prayer_times[p]) + '</b></span>' : '';
@@ -258,6 +262,8 @@ function render(plan) {
       if (s.cuisine) badges += '<span class="badge k">' + esc(s.cuisine) + '</span>';
       else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(s.categories[0]) + '</span>';
       if (s.jumuah) badges = '<span class="badge jumuah">Jumu\'ah · Friday prayer</span>' + badges;
+      if (s.taraweeh) badges = '<span class="badge jumuah">Isha · Taraweeh</span>' + badges;
+      if (s.iftar) badges = '<span class="badge iftar">🌙 Iftar</span>' + badges;
       var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
       list += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '"><div class="t">' + esc(s.time) + '</div><div class="dot">' + (si + 1) + '</div>' +
         '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + '</h4><p dir="auto">' + esc(s.why) + '</p>' +

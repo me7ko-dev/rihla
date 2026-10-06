@@ -15,6 +15,8 @@ what you love — films, books, authors, music, games, teams — and its agent b
   *Serves alcohol* flag; bars, pubs and meyhanes are never suggested
 - 🕌 **every day built around the prayers**: Dhuhr, Asr and Maghrib at the mosque nearest to where you are at that
   moment, with the day's real prayer times and Hijri date — and Jumu'ah at a well-known mosque on Fridays
+- 🌙 **Ramadan-aware**: on fasting days there is nothing to eat between Fajr and Maghrib, iftar comes right after the
+  Maghrib prayer, and Isha with Taraweeh is planned at a well-known mosque; Eid days are marked
 - 👨‍👩‍👧 **family-aware**: *Good for kids* places, famous highlights mixed with personal finds
 
 Built for the [Qloo Agentic Hackathon](https://qloo.devpost.com/).
@@ -75,12 +77,15 @@ uvicorn app.main:app --port 8090
 
 Open http://localhost:8090. Qloo responses are cached for a week (the hackathon key allows 10,000 requests a month).
 
-Tests (offline, no keys needed): `pip install pytest && pytest -q`
+Tests (offline, no keys needed: prayer times, Ramadan, halal levels, routing…): `pip install pytest && pytest -q`
 
 ## Reliability
 - If the language model is unavailable, Rihla runs the same tools itself and assembles the plan from the same Qloo
   results, so a visitor never sees an empty error.
 - If OpenStreetMap's geocoder refuses the server, the destination is found with Qloo instead.
+- If AlAdhan cannot be reached, Rihla calculates the prayer times itself with the same method per country (within a
+  minute or two of AlAdhan, rounded so a prayer is never shown before its time), the time zone from the coordinates
+  and the Hijri date from the Umm al-Qura calendar.
 - API keys stay on the server (never in the browser, never in error messages); a fair-use limit protects the
   monthly Qloo quota.
 

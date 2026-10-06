@@ -32,6 +32,10 @@ BABY = re.compile(r"\b(bab(y|ies)|toddlers?|infants?|бебе(та)?)\b", re.I)
 AGE = re.compile(r"\b(\d{1,2})\s*-?\s*(?:years?|yrs?)\s*-?\s*olds?\b|\b(\d{1,2})\s*y/?o\b|\bage[ds]?\s*(?:of\s*)?(\d{1,2})\b"
                  r"|\b(\d{1,2})\s*-?\s*годишн", re.I)
 RANK = {"verified": 0, "likely": 1, "unknown": 2}
+DAY_PRAYERS = ("Dhuhr", "Asr", "Maghrib")  # Fajr and Isha are usually at the hotel
+IFTAR_WHY = "Iftar: break your fast here after Maghrib — restaurants fill up at sunset, so book a table."
+TARAWEEH_WHY = ("Isha and Taraweeh, the special Ramadan night prayers — stay for as many rak'ahs as suits you "
+                "(the full prayer takes about an hour).")
 # "Orhan Pamuk's novels" -> "Orhan Pamuk", "Pixar movies" -> "Pixar"
 GENERIC_WORDS = re.compile(r"'s\b|\b(movies?|films?|novels?|books?|series|shows?|tv|music|songs?|albums?|video ?games?|games?|"
                            r"franchise|saga|cartoons?|anime)\b", re.I)
@@ -66,6 +70,11 @@ You plan real days in a real city using ONLY places returned by your tools. Rule
   suits THIS traveller (kids' ages, interests, faith). Do not mention "fans" or taste data: the app shows Qloo's
   taste matches next to each stop. Only state facts you can see in the tool results; never invent links.
 - Every day needs lunch and dinner from the food results, and prayer stops at mosques from mosques_near.
+- A day marked "ramadan": true is a fasting day: NO meals, cafes or snacks between Fajr and Maghrib. Its one meal is
+  iftar, a "meal" stop right after the Maghrib prayer near that mosque; add Isha (with Taraweeh) as a prayer stop at a
+  well-known mosque. Keep fasting days lighter (fewer, closer sights; indoor in the afternoon) and add one tip about
+  Ramadan there (book iftar tables early, suhoor before Fajr, Taraweeh). A day with "eid" is the festival itself:
+  mention the Eid prayer in the early morning at a large mosque.
 - When you have what you need, stop calling tools and say READY. You will then be asked for the final JSON.
   Write all text in {language}."""
 
@@ -698,7 +707,9 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
     user = {
         "destination": {"name": dest["name"], "lat": dest["lat"], "lon": dest["lon"], "country_code": dest["country_code"]},
         "days": days, "start_date": start.isoformat(), "travellers": travellers, "tastes": tastes,
-        "prayer_times": [{"day": i + 1, "date": p["date"], **p["timings"]} for i, p in enumerate(prayers)],
+        "prayer_times": [{"day": i + 1, "date": p["date"], **p["timings"],
+                          **({"ramadan": True} if p.get("ramadan") else {}), **({"eid": p["eid"]} if p.get("eid") else {})}
+                         for i, p in enumerate(prayers)],
     }
     llm = LLM()
     msgs = [{"role": "system", "content": SYSTEM.replace("{language}", language)},
@@ -851,12 +862,12 @@ def _mins(hhmm: str) -> int | None:
         return None
 
 
-def _prayer_name(hhmm: str, timings: dict) -> str:
-    """The daytime prayer (Dhuhr, Asr, Maghrib) closest to hh:mm."""
+def _prayer_name(hhmm: str, timings: dict, isha: bool = False) -> str:
+    """The daytime prayer (Dhuhr, Asr, Maghrib; in Ramadan also Isha with Taraweeh) closest to hh:mm."""
     t = _mins(hhmm)
     if t is None:
         return "Prayer"
-    return min(("Dhuhr", "Asr", "Maghrib"), key=lambda p: abs((_mins(timings.get(p, "")) or 9999) - t))
+    return min(DAY_PRAYERS + (("Isha",) if isha else ()), key=lambda p: abs((_mins(timings.get(p, "")) or 9999) - t))
 
 
 STOP_FIELDS = ("name", "lat", "lon", "address", "cuisine", "halal_level", "halal_reason", "website", "image", "source",
@@ -892,6 +903,7 @@ def _centre(day: dict, fallback: tuple[float, float]) -> tuple[float, float]:
 
 
 DURATION = {"sight": 75, "meal": 60, "prayer": 20, "rest": 45}  # minutes a stop usually takes
+JUMUAH_MIN, TARAWEEH_MIN = 45, 75  # Friday prayer with its sermon; Isha with Taraweeh in Ramadan
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
@@ -948,6 +960,52 @@ def _jumuah(final: dict, trip: Trip) -> None:
                 day["stops"].sort(key=lambda x: _mins(x.get("time", "")) or 0)
 
 
+FOODISH = re.compile(r"\b(cafe|coffee|bakery|ice cream|tea|dessert|patisserie|restaurant|food)\b", re.I)
+
+
+def _fasting(final: dict, trip: Trip) -> None:
+    """Ramadan: nothing to eat or drink between Fajr and Maghrib, so food stops in those hours go (a cafe the model
+    filed as a sight or a rest too). The day's meal is iftar after Maghrib, added by _fill_days if missing."""
+    for day in final.get("days", []):
+        if not day.get("ramadan"):
+            continue
+        maghrib = _mins((day.get("prayer_times") or {}).get("Maghrib", "")) or 18 * 60
+        def eats(st: dict) -> bool:
+            p = trip.places.get(st.get("ref"), st)
+            return st.get("kind") == "meal" or bool(p.get("halal_level")) or \
+                any(FOODISH.search(c) for c in p.get("categories") or [])
+        day["stops"] = [st for st in day["stops"] if st.get("kind") == "prayer" or not eats(st)
+                        or (_mins(st.get("time", "")) or 0) >= maghrib]
+
+
+def _taraweeh(day: dict, trip: Trip, home: tuple[float, float]) -> None:
+    """Ramadan nights: Isha with Taraweeh at a well-known mosque (Qloo) near the iftar, if the model did not add it."""
+    t = _mins((day.get("prayer_times") or {}).get("Isha", ""))
+    if t is None or any(st.get("prayer") == "Isha" for st in day["stops"]):
+        return
+    here = _near_stop(day, t, home)
+    near = trip.near("mosques", *here, 3000, 20)
+    mosque = next((m for m in near if m.get("source") == "qloo"), None) or next(iter(near), None)
+    if mosque:
+        day["stops"].append(_fill_stop({"time": _hhmm(t), "kind": "prayer", "prayer": "Isha", "taraweeh": True,
+                                        "ref": mosque["ref"], "added_by": "rihla", "why": TARAWEEH_WHY}, mosque))
+
+
+def _iftar(final: dict) -> None:
+    """The first meal after Maghrib on a fasting day is the iftar; the trip gets a Ramadan tip if it has none."""
+    fasting = [d for d in final.get("days", []) if d.get("ramadan")]
+    for day in fasting:
+        maghrib = _mins((day.get("prayer_times") or {}).get("Maghrib", "")) or 18 * 60
+        meal = next((st for st in day["stops"] if st.get("kind") == "meal" and (_mins(st.get("time", "")) or 0) >= maghrib), None)
+        if meal:  # break the fast soon after the Maghrib prayer, so the meal is over before Isha and Taraweeh
+            meal["iftar"] = True
+            meal["time"] = _hhmm(min(_mins(meal.get("time", "")) or 0, (maghrib + 25 + 4) // 5 * 5))
+    tips = final.setdefault("tips", [])
+    if fasting and not any(re.search(r"ramad|iftar|suhoor|sahur|рамадан|ифтар|رمضان|إفطار", t, re.I) for t in tips):
+        tips.insert(0, "Ramadan: most restaurants fill up at iftar, so book a table; eat suhoor before Fajr "
+                       "and keep afternoons light and indoors.")
+
+
 def _open_at(p: dict, date: str | None, t: int) -> bool:
     hours = _opening(p, date)
     return hours is None or (hours is not False and hours[0] <= t <= hours[1] - 60)
@@ -996,7 +1054,7 @@ def _fill_days(final: dict, trip: Trip) -> None:
     for day in days:
         # Dhuhr, Asr and Maghrib every day, at the mosque nearest to where the traveller is then
         have = {st.get("prayer") for st in day["stops"] if st.get("kind") == "prayer"}
-        for name in ("Dhuhr", "Asr", "Maghrib"):
+        for name in DAY_PRAYERS:
             t = _mins((day.get("prayer_times") or {}).get(name, ""))
             if name in have or t is None:
                 continue
@@ -1004,19 +1062,22 @@ def _fill_days(final: dict, trip: Trip) -> None:
             if mosque:
                 day["stops"].append(_fill_stop({"time": _hhmm(t), "kind": "prayer", "prayer": name, "ref": mosque["ref"],
                                                 "added_by": "rihla", "why": f"{name} at the mosque nearest to your other stops."}, mosque))
-        # lunch and dinner
-        for lo, hi, at, label in ((11 * 60 + 30, 14 * 60 + 30, 12 * 60 + 30, "lunch"), (18 * 60, 21 * 60, None, "dinner")):
+        maghrib = _mins((day.get("prayer_times") or {}).get("Maghrib", "")) or 18 * 60
+        # lunch and dinner; on a fasting day only iftar, after the Maghrib prayer
+        meals = ((maghrib, maghrib + 180, maghrib + 25, "iftar"),) if day.get("ramadan") else \
+            ((11 * 60 + 30, 14 * 60 + 30, 12 * 60 + 30, "lunch"), (18 * 60, 21 * 60, min(maghrib + 25, 20 * 60 + 30), "dinner"))
+        for lo, hi, at, label in meals:
             if any(st.get("kind") == "meal" and lo <= (_mins(st.get("time", "")) or 0) <= hi for st in day["stops"]):
                 continue
-            if at is None:  # dinner after Maghrib
-                at = min(((_mins((day.get("prayer_times") or {}).get("Maghrib", "")) or 18 * 60) + 25), 20 * 60 + 30)
             here = _near_stop(day, at, home)
             options = [x for x in trip.near("halal", *here, 2000, 40) if _key(x["name"]) not in used]
             food = min(options, key=lambda x: (RANK.get(x.get("halal_level"), 3), bool(x.get("alcohol")), x["distance_m"]), default=None)
             if food:
                 day["stops"].append(_fill_stop({"time": _hhmm(at), "kind": "meal", "ref": food["ref"], "added_by": "rihla",
-                                                "why": f"A halal {label} close to your other stops."}, food))
+                                                "why": IFTAR_WHY if label == "iftar" else f"A halal {label} close to your other stops."}, food))
                 used.add(_key(food["name"]))
+        if day.get("ramadan"):
+            _taraweeh(day, trip, home)
         # long empty stretches between 09:00 and 20:00
         for _ in range(4):
             if sum(1 for st in day["stops"] if st.get("kind") == "sight") >= target:
@@ -1035,6 +1096,7 @@ def _fill_days(final: dict, trip: Trip) -> None:
             seen = [(st["lat"], st["lon"]) for d in days for st in d["stops"] if st.get("kind") == "sight" and st.get("lat") is not None]
             pool = [x for x in trip.near("sights", *here, 3000, 60) if _key(x["name"]) not in used and not x.get("halal_level")
                     and _open_at(x, day.get("date"), start)
+                    and not (day.get("ramadan") and any(FOODISH.search(c) for c in x.get("categories") or []))
                     # not part of a place already in the plan (the Imperial Council Hall is inside Topkapi Palace)
                     and all(osm.distance_m(x["lat"], x["lon"], a, b) > 300 for a, b in seen)]
             pick = min(pool, default=None, key=lambda x: x["distance_m"] - 900 * bool(x.get("topic")) - 700 * bool(x.get("popular"))
@@ -1073,7 +1135,7 @@ def _untangle(final: dict, kids: bool = False) -> None:
         for st in stops:
             t = _mins(st.get("time", "")) or 0
             if st.get("kind") == "prayer":
-                ends = t + (45 if st.get("jumuah") else DURATION["prayer"])
+                ends = t + (JUMUAH_MIN if st.get("jumuah") else TARAWEEH_MIN if st.get("taraweeh") else DURATION["prayer"])
                 if ends >= free:
                     free, last = ends, st
                 continue
@@ -1133,7 +1195,7 @@ async def _meals_nearby(final: dict, trip: Trip) -> None:
             food = min(options(), key=lambda x: (RANK.get(x.get("halal_level"), 3), bool(x.get("alcohol")), x["distance_m"]), default=None)
             if food:
                 used.discard(_key(st.get("name", "")))
-                keep = {k: st[k] for k in ("time", "kind") if k in st}
+                keep = {k: st[k] for k in ("time", "kind", "iftar") if k in st}
                 st.clear()
                 st.update(_fill_stop(dict(keep, ref=food["ref"], added_by="rihla",
                                           why=f"A halal meal a short walk from {before[0].get('name', 'your previous stop')}."), food))
@@ -1171,6 +1233,7 @@ def _polish(final: dict, trip: Trip) -> None:
             done |= words(x)
             added += 1
     _check_hours(final, trip)
+    _fasting(final, trip)
     _fill_days(final, trip)
     _check_hours(final, trip, drop=False)
     # pray at the mosque nearest to where the family is at that time (the model tends to reuse one mosque all day)
@@ -1185,11 +1248,13 @@ def _polish(final: dict, trip: Trip) -> None:
             best = min(trip.near("mosques", *here, 6000, 12), default=None,
                        key=lambda m: m["distance_m"] - (400 if m.get("source") == "qloo" else 0))
             if best and best["ref"] != st.get("ref") and                     osm.distance_m(*here, st["lat"], st["lon"]) - best["distance_m"] > 600:
-                keep = {k: st[k] for k in ("time", "kind", "prayer") if k in st}
+                keep = {k: st[k] for k in ("time", "kind", "prayer", "taraweeh") if k in st}
                 st.clear()
-                st.update(_fill_stop(dict(keep, ref=best["ref"], why=f"{keep.get('prayer', 'Prayer')} at the mosque nearest to "
-                                                                       f"{around[0].get('name', 'your previous stop')}."), best))
+                why = TARAWEEH_WHY if keep.get("taraweeh") else \
+                    f"{keep.get('prayer', 'Prayer')} at the mosque nearest to {around[0].get('name', 'your previous stop')}."
+                st.update(_fill_stop(dict(keep, ref=best["ref"], why=why), best))
     _jumuah(final, trip)
+    _iftar(final)
     # a "why" that names another place (the model mixed two stops up) is replaced by the facts we have
     names = {_key(x.get("name", "")) for x in trip.places.values() if len(x.get("name", "")) >= 8}
     for d in days:
@@ -1210,6 +1275,8 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
         day["date"] = prayers[i]["date"] if i < len(prayers) else None
         day["hijri"] = prayers[i]["hijri"] if i < len(prayers) else None
         day["prayer_times"] = prayers[i]["timings"] if i < len(prayers) else {}
+        day["ramadan"] = bool(i < len(prayers) and prayers[i].get("ramadan"))
+        day["eid"] = prayers[i].get("eid", "") if i < len(prayers) else ""
         stops, prayed = [], set()
         for s in day.get("stops", []):
             p = trip.places.get(s.get("ref", ""))
@@ -1232,12 +1299,14 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
                 s["ref"] = p.get("ref", s.get("ref"))
             if s.get("kind") == "prayer" and day.get("prayer_times"):
                 # a prayer stop sits exactly at the prayer time, whatever time the model wrote
-                name = _prayer_name(s.get("time", ""), day["prayer_times"])
+                name = _prayer_name(s.get("time", ""), day["prayer_times"], isha=day["ramadan"])
                 if name in prayed:
                     continue  # one stop per prayer (the model sometimes lists two mosques for Dhuhr)
                 prayed.add(name)
                 s["time"], s["prayer"] = day["prayer_times"][name], name
-                if not s.get("why") or "prayer" not in s["why"].lower():
+                if name == "Isha":
+                    s["taraweeh"], s["why"] = True, TARAWEEH_WHY
+                elif not s.get("why") or "prayer" not in s["why"].lower():
                     s["why"] = f"{name} prayer at the mosque closest to your previous stop."
             if not p:
                 continue
@@ -1270,6 +1339,8 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     await _meals_nearby(final, trip)
     _untangle(final, trip.kids)
     final["destination"] = trip.dest
+    final["ramadan"] = any(d.get("ramadan") for d in final.get("days", []))
+    final["prayer_source"] = "Rihla (calculated)" if any(p.get("calculated") for p in prayers) else "AlAdhan"
     final["timezone"] = next((p["timezone"] for p in prayers if p.get("timezone")), "")  # the plan's times are local there
     final["trace"] = trip.trace
     final["signals"] = list(trip.signals.values())
