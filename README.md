@@ -80,9 +80,12 @@ Tests (offline, no keys needed): `pip install pytest && pytest -q`
 ## Reliability
 - If the language model is unavailable, Rihla runs the same tools itself and assembles the plan from the same Qloo
   results, so a visitor never sees an empty error.
-- If OpenStreetMap's geocoder refuses the server, the destination is found with Qloo instead.
+- Every plan is ready within 4 minutes, well inside the server's limit: a slow model hands over to the next one, and
+  when time runs short Rihla assembles the plan itself.
+- If prayer times cannot be loaded, the plan is still made and says so; nothing is ever scheduled during a prayer.
+- If OpenStreetMap's geocoder refuses the server, the destination is found with Qloo instead (only when the name matches).
 - API keys stay on the server (never in the browser, never in error messages); a fair-use limit protects the
-  monthly Qloo quota.
+  monthly Qloo quota, and a plan that fails never counts against it.
 
 ## License
 

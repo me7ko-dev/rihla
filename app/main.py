@@ -30,23 +30,39 @@ def _clean(text: str) -> str:
     return _KEYLIKE.sub("***", text)
 
 
-# Fair use: every plan costs Qloo requests (10,000 a month) and LLM calls, so one visitor cannot use them all up
-PER_IP_HOUR = 6
+# Fair use: every plan costs Qloo requests (10,000 a month) and LLM calls, so one visitor cannot use them all up.
+# Only plans that were made count: a typo or a failed plan never uses up a visitor's turn.
+PER_IP_HOUR = 10
 PER_DAY = 300
 _by_ip: dict[str, deque] = defaultdict(deque)
 _today: deque = deque()
 
 
+def _ip(request: Request) -> str:
+    # Vercel sets x-vercel-forwarded-for / x-real-ip itself; x-forwarded-for can carry what the client sent
+    h = request.headers
+    ip = h.get("x-vercel-forwarded-for") or h.get("x-real-ip") or h.get("x-forwarded-for") or (request.client.host if request.client else "?")
+    return ip.split(",")[0].strip()
+
+
+def _refund(request: Request) -> None:
+    """Give the visitor their turn back: the plan could not be made."""
+    for q in (_by_ip[_ip(request)], _today):
+        if q:
+            q.pop()
+
+
 def _allow(request: Request) -> None:
     now = time.time()
-    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")).split(",")[0].strip()
-    mine = _by_ip[ip]
+    mine = _by_ip[_ip(request)]
     while mine and now - mine[0] > 3600:
         mine.popleft()
     while _today and now - _today[0] > 86400:
         _today.popleft()
     if len(mine) >= PER_IP_HOUR:
-        raise HTTPException(429, "You have planned several trips in the last hour — please try again a little later.")
+        wait = max(1, round((3600 - (now - mine[0])) / 60))
+        raise HTTPException(429, f"You have planned {PER_IP_HOUR} trips in the last hour — you can plan the next one in about "
+                                 f"{wait} minute{'s' if wait > 1 else ''}. The example plans and your saved trips still open.")
     if len(_today) >= PER_DAY:
         raise HTTPException(429, "Rihla has planned many trips today — please come back tomorrow.")
     mine.append(now)
@@ -69,8 +85,10 @@ async def make_plan(req: PlanRequest, request: Request):
         return await agent.plan(req.destination, req.days, req.start or dt.date.today() + dt.timedelta(days=7),
                                 req.travellers, req.tastes, req.language)
     except ValueError as e:
+        _refund(request)
         raise HTTPException(400, str(e))
     except Exception as e:
+        _refund(request)
         log.exception("plan failed")
         raise HTTPException(502, _clean(f"Planning failed: {str(e)[:200]}"))
 
@@ -87,8 +105,13 @@ async def make_plan_stream(req: PlanRequest, request: Request):
                                     req.travellers, req.tastes, req.language, emit=q.put)
             await q.put({"type": "done", "plan": plan})
         except ValueError as e:
+            _refund(request)
             await q.put({"type": "error", "detail": _clean(str(e))})
+        except asyncio.CancelledError:
+            _refund(request)  # the visitor left before the plan was ready
+            raise
         except Exception as e:
+            _refund(request)
             log.exception("plan failed")
             await q.put({"type": "error", "detail": _clean(f"Planning failed: {str(e)[:200]}")})
 

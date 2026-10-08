@@ -86,6 +86,65 @@ def test_no_overlapping_stops_and_prayers_stay_put():
     assert times["A"] == "11:00" and times["B"] == "12:15" and times["Mosque"] == "12:46"
 
 
+@pytest.mark.parametrize("text, mins", [
+    ("13:30", 810), ("9:30", 570), ("1:30 PM", 810), ("12:15 am", 15), ("13h30", 810), ("noon", None), ("25:00", None),
+])
+def test_times_as_the_model_writes_them(text, mins):
+    assert agent._mins(text) == mins
+
+
+def test_no_visit_during_or_just_before_a_prayer():
+    final = {"days": [{"stops": [
+        {"time": "15:25", "kind": "sight", "name": "Zoo"},          # 19 min before Asr: after the prayer instead
+        {"time": "15:44", "kind": "prayer", "name": "Mosque"},
+        {"time": "18:00", "kind": "sight", "name": "Fountain"},     # would start during Maghrib
+        {"time": "18:03", "kind": "prayer", "name": "Mosque 2"},
+        {"time": "23:00", "kind": "meal", "name": "Late"},          # too late to happen: dropped
+    ]}]}
+    agent._untangle(final)
+    times = {s["name"]: s["time"] for s in final["days"][0]["stops"]}
+    assert times == {"Zoo": "16:05", "Mosque": "15:44", "Fountain": "18:25", "Mosque 2": "18:03"}
+
+
+def test_a_visit_moved_past_closing_time_is_left_out():
+    final = {"days": [{"stops": [
+        {"time": "15:25", "kind": "sight", "name": "Zoo", "open_today": "10:00–16:30"},   # after Asr it is closing
+        {"time": "15:44", "kind": "prayer", "name": "Mosque"},
+    ]}]}
+    agent._untangle(final)
+    assert [s["name"] for s in final["days"][0]["stops"]] == ["Mosque"]
+
+
+def test_plan_goes_on_without_prayer_times(monkeypatch):
+    async def down(*a, **k):
+        raise RuntimeError("503 Service Unavailable")
+    monkeypatch.setattr(agent.prayer, "times", down)
+    day = asyncio.run(agent._prayer_times({"lat": 51.5, "lon": -0.12, "country_code": "gb"}, agent.dt.date(2026, 10, 17)))
+    assert day["date"] == "2026-10-17" and day["timings"] == {} and day["missing"]
+
+
+def test_no_language_model_key_is_a_clean_failure(monkeypatch):
+    monkeypatch.setattr(agent.config, "LLM_API_KEY", "")
+    monkeypatch.setattr(agent.config, "FALLBACK_API_KEY", "")
+    with pytest.raises(RuntimeError):   # plan() catches this and assembles the plan itself
+        asyncio.run(agent.LLM().chat(messages=[]))
+
+
+def test_the_model_is_not_called_without_time_left(monkeypatch):
+    monkeypatch.setattr(agent.config, "LLM_API_KEY", "nvapi-test")
+    llm = agent.LLM(deadline=agent.time.time() + 15)
+    with pytest.raises(RuntimeError):
+        asyncio.run(llm.chat(messages=[]))
+
+
+@pytest.mark.parametrize("query, found, same", [
+    ("Sultanahmet, Istanbul", "Istanbul", True), ("istambul", "Istanbul", True), ("London", "London", True),
+    ("Lodnon", "London", True), ("Qwxzv", "Quezon City", False), ("Paris", "Parma", False),
+])
+def test_qloo_city_must_match_what_was_written(query, found, same):
+    assert qloo.same_place(query, found) == same
+
+
 def _at(km_north: float) -> dict:
     return {"lat": 51.5 + km_north / 111.2, "lon": -0.12}   # London, km_north km (straight line) up the map
 
@@ -222,6 +281,19 @@ def test_fair_use_limit(monkeypatch):
     with pytest.raises(HTTPException) as e:
         main._allow(Req())
     assert e.value.status_code == 429
+
+
+def test_failed_plans_do_not_use_up_the_limit(monkeypatch):
+    monkeypatch.setattr(main, "_by_ip", main.defaultdict(main.deque))
+
+    class Req:
+        headers = {"x-vercel-forwarded-for": "203.0.113.8", "x-forwarded-for": "198.51.100.1"}
+        client = None
+    for _ in range(main.PER_IP_HOUR * 2):   # e.g. a typo in the city, again and again
+        main._allow(Req())
+        main._refund(Req())
+    main._allow(Req())
+    assert len(main._by_ip["203.0.113.8"]) == 1 and not main._by_ip["198.51.100.1"]
 
 
 def test_mock_qloo_without_key(monkeypatch):

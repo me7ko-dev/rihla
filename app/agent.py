@@ -22,6 +22,8 @@ from . import config, halal, osm, prayer, qloo
 
 log = logging.getLogger("rihla")
 MAX_STEPS = 6
+# Vercel stops the function at 300 s: the plan must be ready well before that, with or without the model
+BUDGET_S = 240
 COMPOSE_THINK = False  # Nemotron's reasoning on the final plan: ~70 s instead of ~20 s, little better in tests
 AREA_M = 3000  # one OpenStreetMap area around the destination (seed_cities.py uses the same)
 EMPTY_AREA = {"halal": [], "mosques": [], "sights": []}
@@ -128,26 +130,35 @@ COMPOSE = ("You have gathered enough. Now write the final itinerary as ONE JSON 
 class LLM:
     """Primary model with a fallback provider; retries briefly on rate limits."""
 
-    def __init__(self):
+    def __init__(self, deadline: float | None = None):
         # Nemotron: turning the visible "thinking" off makes each call ~2 s instead of 5-30 s
         nv = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}} if "nvidia" in config.LLM_BASE_URL else {}
-        self.clients = [(AsyncOpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_BASE_URL, timeout=150), config.LLM_MODEL, nv)]
-        if config.FALLBACK_API_KEY:
-            self.clients.append((AsyncOpenAI(api_key=config.FALLBACK_API_KEY, base_url=config.FALLBACK_BASE_URL, timeout=90),
-                                 config.FALLBACK_MODEL, {}))
+        # no hidden SDK retries (3 x 150 s would outlast the server): a slow provider hands over to the next one
+        self.clients = []
+        for key, url, model, limit, extra in ((config.LLM_API_KEY, config.LLM_BASE_URL, config.LLM_MODEL, 150, nv),
+                                              (config.FALLBACK_API_KEY, config.FALLBACK_BASE_URL, config.FALLBACK_MODEL, 90, {})):
+            if key:
+                self.clients.append((AsyncOpenAI(api_key=key, base_url=url, timeout=limit, max_retries=0), model, extra, limit))
+        self.deadline = deadline or time.time() + BUDGET_S
         self.used = config.LLM_MODEL
         self.log: list[dict] = []
+
+    def left(self) -> float:
+        return self.deadline - time.time()
 
     async def chat(self, think: bool = False, **kw):
         """think=True keeps Nemotron's reasoning on (slower, better) — used for the final itinerary."""
         last: Exception | None = None
-        for client, model, extra in self.clients:
+        for client, model, extra, limit in self.clients:
             if think:
                 extra = {}
             for attempt in range(3):
+                wait = min(limit, self.left() - 20)
+                if wait < 10:
+                    raise RuntimeError("No time left for the language model")
                 try:
                     t0 = time.time()
-                    r = await client.chat.completions.create(model=model, **kw, **extra)
+                    r = await client.chat.completions.create(model=model, **kw, **extra, timeout=wait)
                     self.used = model
                     self.log.append({"model": model, "s": round(time.time() - t0, 1),
                                      "out": getattr(r.usage, "completion_tokens", None), "think": not extra})
@@ -160,7 +171,7 @@ class LLM:
                 except APIError as e:  # 5xx / timeouts: try the next provider
                     last = e
                     break
-        raise RuntimeError(f"All language models failed: {last}")
+        raise RuntimeError(f"All language models failed: {last or 'no API key'}")
 
 
 def _json(text: str) -> dict | None:
@@ -215,6 +226,7 @@ class Trip:
         self.audiences = [qloo.AUDIENCES["muslim"]] + ([qloo.AUDIENCES["kids"]] if self.kids else [])
         self.osm_task: asyncio.Task | None = None
         self._osm: dict | None = None
+        self._osm_by: float | None = None
 
     async def osm(self, wait: float = 20.0) -> dict:
         """The OpenStreetMap area, fetched in the background; empty if it is not ready in time
@@ -223,6 +235,10 @@ class Trip:
             return self._osm
         if self.osm_task is None:
             return EMPTY_AREA
+        # the first caller waits; once that wait is over, later callers only take the map if it has arrived
+        if self._osm_by is None:
+            self._osm_by = time.time() + wait
+        wait = max(0.05, min(wait, self._osm_by - time.time()))
         try:
             self._osm = await asyncio.wait_for(asyncio.shield(self.osm_task), wait)
         except asyncio.TimeoutError:
@@ -693,19 +709,20 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
                                                  all_food=dest["country_code"] in halal.MUSLIM_MAJORITY))
     days = max(1, min(days, 4))
     await emit({"type": "step", "text": f"Getting prayer times for {days} day{'s' if days > 1 else ''}"})
-    prayers = await asyncio.gather(*[prayer.times(dest["lat"], dest["lon"], start + dt.timedelta(days=i), dest["country_code"])
-                                     for i in range(days)])
+    prayers = await asyncio.gather(*[_prayer_times(dest, start + dt.timedelta(days=i)) for i in range(days)])
     user = {
         "destination": {"name": dest["name"], "lat": dest["lat"], "lon": dest["lon"], "country_code": dest["country_code"]},
         "days": days, "start_date": start.isoformat(), "travellers": travellers, "tastes": tastes,
         "prayer_times": [{"day": i + 1, "date": p["date"], **p["timings"]} for i, p in enumerate(prayers)],
     }
-    llm = LLM()
+    llm = LLM(deadline=t0 + BUDGET_S)
     msgs = [{"role": "system", "content": SYSTEM.replace("{language}", language)},
             {"role": "user", "content": "Plan this trip:\n" + json.dumps(user, ensure_ascii=False)}]
     # 1) research: the model calls the tools it needs until it says it is ready
     model_down = False
     for step in range(MAX_STEPS):
+        if llm.left() < 120:
+            break
         try:
             r = await llm.chat(messages=msgs, tools=TOOLS, temperature=0.4, max_tokens=4000, tool_choice="auto")
         except BadRequestError as e:
@@ -794,6 +811,16 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
     return result
 
 
+async def _prayer_times(dest: dict, date: dt.date) -> dict:
+    """The day's prayer times; if AlAdhan cannot be reached (twice), the day is planned without them."""
+    for attempt in range(2):
+        try:
+            return await prayer.times(dest["lat"], dest["lon"], date, dest["country_code"])
+        except Exception:
+            log.warning("prayer times unavailable for %s (attempt %d)", date, attempt + 1)
+    return {"date": date.isoformat(), "hijri": "", "timings": {}, "method": "", "timezone": "", "missing": True}
+
+
 async def _research_without_model(trip: Trip, tastes: str, emit) -> None:
     """The language model is down: run the research tools directly — names the traveller wrote become taste
     signals, then places, halal food and mosques around the destination."""
@@ -844,11 +871,20 @@ def _plan_without_model(trip: Trip, days: int, start: dt.date) -> dict:
     return out
 
 
+_TIME = re.compile(r"(\d{1,2})\s*[:.h]\s*(\d{2})\s*([ap])?\.?\s*m?\b", re.I)
+
+
 def _mins(hhmm: str) -> int | None:
-    try:
-        return int(hhmm[:2]) * 60 + int(hhmm[3:5])
-    except (ValueError, IndexError, TypeError):
+    """Minutes after midnight for "13:30", "9:30", "1:30 PM" or "13h30"; None if it is not a time."""
+    m = _TIME.search(hhmm) if isinstance(hhmm, str) else None
+    if not m:
         return None
+    h, mins, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").lower()
+    if ap == "p" and h < 12:
+        h += 12
+    elif ap == "a" and h == 12:
+        h = 0
+    return h * 60 + mins if h < 24 and mins < 60 else None
 
 
 def _prayer_name(hhmm: str, timings: dict) -> str:
@@ -892,6 +928,8 @@ def _centre(day: dict, fallback: tuple[float, float]) -> tuple[float, float]:
 
 
 DURATION = {"sight": 75, "meal": 60, "prayer": 20, "rest": 45}  # minutes a stop usually takes
+MIN_STAY = 30  # a visit that would have less time than this before a prayer starts after the prayer instead
+LATEST = 21 * 60 + 30  # nothing new starts after 21:30
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
@@ -1065,24 +1103,30 @@ def _travel_min(a: dict, b: dict, kids: bool = False) -> int:
 
 def _untangle(final: dict, kids: bool = False) -> None:
     """No two stops at the same time, and time to get from one to the next: each stop starts when the previous
-    one is over and the walk or ride is done (prayers stay at their exact times; a visit that would start during
-    a prayer starts after it)."""
+    one is over and the walk or ride is done. Prayers stay at their exact times; a visit or meal that would start
+    during a prayer, or less than half an hour before it, starts after it (from the mosque). A visit that would
+    now start too late (after 21:30, or when the place is about to close) is left out."""
     for day in final.get("days", []):
-        stops = sorted(day["stops"], key=lambda st: (_mins(st.get("time", "")) or 0, st.get("kind") != "prayer"))
-        free, last = 0, None  # when and where the traveller is free again
-        for st in stops:
-            t = _mins(st.get("time", "")) or 0
-            if st.get("kind") == "prayer":
-                ends = t + (45 if st.get("jumuah") else DURATION["prayer"])
-                if ends >= free:
-                    free, last = ends, st
-                continue
-            ready = free + (_travel_min(last, st, kids) if last else 0)
-            if t < ready:
-                t = (ready + 4) // 5 * 5
-                st["time"] = _hhmm(t)
-            free, last = t + DURATION.get(st.get("kind"), 45), st
-        day["stops"] = sorted(stops, key=lambda st: _mins(st.get("time", "")) or 0)
+        prayers = sorted((st for st in day["stops"] if st.get("kind") == "prayer"), key=lambda st: _mins(st.get("time", "")) or 0)
+        others = sorted((st for st in day["stops"] if st.get("kind") != "prayer"), key=lambda st: _mins(st.get("time", "")) or 0)
+        free, last, i, kept = 0, None, 0, []  # when and where the traveller is free again; the next prayer
+        for st in others:
+            want = _mins(st.get("time", "")) or 0
+            while True:
+                t = max(want, free + (_travel_min(last, st, kids) if last else 0))
+                p = prayers[i] if i < len(prayers) else None
+                start = (_mins(p.get("time", "")) or 0) if p else None
+                if p is None or t + MIN_STAY <= start:
+                    break
+                free, last, i = max(free, start + (45 if p.get("jumuah") else DURATION["prayer"])), p, i + 1
+            closes = _mins((st.get("open_today") or "").split("–")[-1])
+            if t > LATEST or (st.get("kind") == "sight" and closes and t >= closes - 45):
+                continue  # too late in the day, or the place closes before there is time to see it
+            if t != want:
+                st["time"] = _hhmm((t + 4) // 5 * 5)
+            kept.append(st)
+            free, last = (_mins(st["time"]) or t) + DURATION.get(st.get("kind"), 45), st
+        day["stops"] = sorted(kept + prayers, key=lambda st: (_mins(st.get("time", "")) or 0, st.get("kind") != "prayer"))
 
 
 def _path_m(points: list[tuple[float, float]]) -> float:
@@ -1207,6 +1251,10 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     used_names: set[str] = set()
     used_points: list[tuple[float, float]] = []  # the same museum can exist twice in the data under two names
     for i, day in enumerate(final.get("days", [])):
+        day["day"] = i + 1  # whatever the model numbered it
+        for s in day.get("stops", []):
+            t = _mins(s.get("time", ""))
+            s["time"] = _hhmm(t) if t is not None else "12:00"
         day["date"] = prayers[i]["date"] if i < len(prayers) else None
         day["hijri"] = prayers[i]["hijri"] if i < len(prayers) else None
         day["prayer_times"] = prayers[i]["timings"] if i < len(prayers) else {}
@@ -1271,6 +1319,8 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     _untangle(final, trip.kids)
     final["destination"] = trip.dest
     final["timezone"] = next((p["timezone"] for p in prayers if p.get("timezone")), "")  # the plan's times are local there
+    if any(p.get("missing") for p in prayers):
+        final.setdefault("tips", []).insert(0, "Prayer times could not be loaded just now: please check the times at a local mosque.")
     final["trace"] = trip.trace
     final["signals"] = list(trip.signals.values())
     final["audiences"] = ["Islam"] + (["Parents with young children"] if trip.kids else [])

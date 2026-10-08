@@ -171,7 +171,7 @@ form.addEventListener('submit', function (e) {
   // the plan arrives as a stream of server-sent events: steps first, then the plan
   fetch('/api/plan/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(function (r) {
-      if (!r.ok || !r.body) return r.json().then(function (j) { throw new Error(j.detail || 'Something went wrong'); });
+      if (!r.ok || !r.body) return r.text().then(function (t) { throw new Error(errorText(r.status, t)); });
       var reader = r.body.getReader(), dec = new TextDecoder(), buf = '';
       function pump() {
         return reader.read().then(function (x) {
@@ -200,6 +200,20 @@ form.addEventListener('submit', function (e) {
     .catch(function (err) { finish(); $('#err').textContent = err.message; $('#err').hidden = false; });
 });
 
+// a message a person can act on, whatever the server or its proxy sent back
+function errorText(status, text) {
+  var j = null;
+  try { j = JSON.parse(text); } catch (e) { }
+  var d = j && j.detail;
+  if (typeof d === 'string' && d) return d;
+  if (Array.isArray(d) && d.length) {  // the form did not pass the server's checks
+    var f = (d[0].loc || []).slice(-1)[0], name = { destination: 'Where are you going', tastes: 'What do you love', travellers: 'Who is travelling' }[f];
+    return (name ? '“' + name + '”: ' : '') + (d[0].msg || 'please check the form') + '.';
+  }
+  return status >= 500 ? 'Rihla’s server is busy right now. Please try again in a minute — or open an example plan below.'
+    : 'Something went wrong (' + status + '). Please try again.';
+}
+
 function render(plan) {
   $('#result').hidden = false;
   $('#how').hidden = true;
@@ -223,7 +237,7 @@ function render(plan) {
   var h = '';
   plan.days.forEach(function (day, di) {
     h += '<article class="card day' + (today.day === di ? ' today' : '') + '"><div class="day-h"><div><h3>' + (today.day === di ? '<span class="today-tag">Today</span> ' : '') +
-      'Day ' + day.day + ' · <span dir="auto">' + esc(day.theme) + '</span></h3>' +
+      'Day ' + (di + 1) + ' · <span dir="auto">' + esc(day.theme) + '</span></h3>' +
       '<div class="date">' + esc(fmtDate(day.date)) + (day.hijri ? ' · ' + esc(day.hijri) + ' AH' : '') + '</div></div></div>';
     if (day.prayer_times) {
       h += '<div class="ptimes">' + ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'].map(function (p) {
@@ -326,14 +340,14 @@ function drawMap(plan) {
       var col = s.kind === 'prayer' ? '#0F7A5C' : s.kind === 'meal' ? '#C2643F' : '#2F6FB3';
       var icon = L.divIcon({ className: '', html: '<div class="num-icon" style="background:' + col + '">' + (si + 1) + '</div>', iconSize: [26, 26], iconAnchor: [13, 13] });
       var m = L.marker([s.lat, s.lon], { icon: icon }).addTo(dl)
-        .bindPopup('<b>Day ' + day.day + ' · ' + esc(s.time) + '</b><br>' + esc(s.name) + (s.halal_level && s.kind === 'meal' ? '<br><i>' + LEVEL[s.halal_level] + '</i>' : '') + navLinks(s));
+        .bindPopup('<b>Day ' + (di + 1) + ' · ' + esc(s.time) + '</b><br>' + esc(s.name) + (s.halal_level && s.kind === 'meal' ? '<br><i>' + LEVEL[s.halal_level] + '</i>' : '') + navLinks(s));
       markers[di + '-' + si] = m; pts.push([s.lat, s.lon]); line.push([s.lat, s.lon]);
     });
     if (line.length > 1) L.polyline(line, { color: DAYCOL[di % DAYCOL.length], weight: 3, opacity: .55, dashArray: '6 6' }).addTo(dl);
   });
   // day buttons above the map
   var bar = $('#daybar');
-  bar.innerHTML = '<button class="on" data-d="-1">All days</button>' + plan.days.map(function (d, i) { return '<button data-d="' + i + '">Day ' + d.day + '</button>'; }).join('');
+  bar.innerHTML = '<button class="on" data-d="-1">All days</button>' + plan.days.map(function (d, i) { return '<button data-d="' + i + '">Day ' + (i + 1) + '</button>'; }).join('');
   bar.onclick = function (e) {
     var b = e.target.closest('button'); if (!b) return;
     bar.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });

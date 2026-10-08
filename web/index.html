@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri:wght@700&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/style.css?v=peek1">
+<link rel="stylesheet" href="/static/style.css?v=fix1">
 </head>
 <body>
 <header class="hero">
@@ -28,7 +28,7 @@
     </div>
     <form id="form" class="card form" autocomplete="off">
       <label>Where are you going?
-        <input name="destination" required placeholder="e.g. Manhattan, New York" value="Manhattan, New York">
+        <input name="destination" required minlength="2" maxlength="120" placeholder="e.g. Manhattan, New York" value="Manhattan, New York">
       </label>
       <div class="quick" aria-label="Examples">
         <button type="button" data-dest="Manhattan, New York">New York</button>
@@ -52,10 +52,10 @@
         </label>
       </div>
       <label>Who is travelling?
-        <input name="travellers" placeholder="e.g. Family of four, kids aged 7 and 11" value="Family of four, kids aged 7 and 11">
+        <input name="travellers" maxlength="300" placeholder="e.g. Family of four, kids aged 7 and 11" value="Family of four, kids aged 7 and 11">
       </label>
       <label>What do you love?
-        <textarea name="tastes" rows="3" placeholder="Films, books, music, food, sports…">We love Pixar movies, Ottoman history, football and spicy food. The kids are into Minecraft and dinosaurs.</textarea>
+        <textarea name="tastes" rows="3" maxlength="600" placeholder="Films, books, music, food, sports…">We love Pixar movies, Ottoman history, football and spicy food. The kids are into Minecraft and dinosaurs.</textarea>
       </label>
       <button class="go" type="submit"><span>Plan my trip</span></button>
       <p class="err" id="err" hidden></p>
@@ -114,6 +114,6 @@
 </footer>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/app.js?v=peek1"></script>
+<script src="/static/app.js?v=fix1"></script>
 </body>
 </html>

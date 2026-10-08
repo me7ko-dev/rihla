@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import httpx
@@ -234,10 +235,22 @@ async def insights(kind: str, *, interests: list[str] | None = None, audiences: 
     return [i for i in items if i.get("id") and not (kind == "place" and is_alcohol_venue(i))]
 
 
+def same_place(query: str, found: str) -> bool:
+    """Is `found` (e.g. "Istanbul") the place the traveller wrote ("Sultanahmet, Istanbul", "istambul")?"""
+    f = found.lower().strip()
+    for part in re.split(r"[,/]", query.lower()):
+        part = part.strip()
+        if part and f and (part in f or f in part or SequenceMatcher(None, part, f).ratio() >= 0.75):
+            return True
+    return False
+
+
 async def locate(name: str) -> dict | None:
     """A city or district by name (when OpenStreetMap's geocoder is unavailable): Qloo locality for the point,
     the nearest Qloo place for the country."""
     found = _entities(await _get("/search", {"query": name, "types": "urn:entity:locality", "take": 1}))
+    if found and not same_place(name, found[0].get("name", "")):
+        return None  # a fuzzy hit for a typo would plan a trip to some other city
     loc = (found[0].get("location") or {}) if found else {}
     if loc.get("lat") is None:
         return None
