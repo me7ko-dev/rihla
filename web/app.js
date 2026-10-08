@@ -128,7 +128,7 @@ document.querySelectorAll('.quick button').forEach(function (b) {
 });
 
 // example plans, made earlier with the same agent and live Qloo data: shown instantly
-document.querySelectorAll('.examples button').forEach(function (b) {
+document.querySelectorAll('.examples button, .peek button').forEach(function (b) {
   b.addEventListener('click', function () {
     $('#err').hidden = true;
     fetch('/static/examples/' + b.dataset.ex + '.json').then(function (r) { if (!r.ok) throw new Error('Example not found'); return r.json(); })
