@@ -13,6 +13,15 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+      - name: Wait until this commit is live
+        run: |
+          for i in $(seq 1 30); do
+            live=$(curl -sS "${{ inputs.url }}/api/health" | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit',''))" || true)
+            echo "live: ${live:-?}  wanted: ${GITHUB_SHA::7}"
+            [ "$live" = "${GITHUB_SHA::7}" ] && exit 0
+            sleep 10
+          done
+          echo "::warning::the live site is not on this commit yet; checking what is live"
       - name: Health and the deployed version
         run: |
           curl -sS --fail "${{ inputs.url }}/api/health"; echo

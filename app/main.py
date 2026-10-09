@@ -3,6 +3,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import os
 import re
 import time
 from collections import defaultdict, deque
@@ -135,7 +136,8 @@ async def make_plan_stream(req: PlanRequest, request: Request):
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "qloo": "mock" if config.QLOO_MOCK else "live", "model": config.LLM_MODEL}
+    return {"ok": True, "qloo": "mock" if config.QLOO_MOCK else "live", "model": config.LLM_MODEL,
+            "commit": os.getenv("VERCEL_GIT_COMMIT_SHA", "")[:7]}  # which version is live
 
 
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
