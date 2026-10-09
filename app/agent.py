@@ -549,9 +549,11 @@ async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
             any(trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())} for k in it.get("known_for") or [])
     top10 = {r: [it["id"] for it in items[:10]] for r, items in own.items()}
 
+    near_top = {it["id"] for it in together[:10]}
+
     def because(pid: str) -> list[str]:
-        if len(refs) == 1:
-            return [trip.signals[refs[0]]]
+        if len(refs) == 1:  # one taste: only the places it ranks highest, not every place on the list
+            return [trip.signals[refs[0]]] if pid in near_top else []
         return [trip.signals[r] for _, r in sorted((ids.index(pid), r) for r, ids in top10.items() if pid in ids)][:2]
 
     out, seen = {}, set()

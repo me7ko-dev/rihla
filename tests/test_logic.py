@@ -367,3 +367,18 @@ def test_places_still_come_if_qloo_refuses_tag_signals(monkeypatch):
     trip.tags = {"urn:tag:keyword:qloo:dinosaurs": "dinosaurs"}
     out = asyncio.run(agent._taste_places(trip, ["museum"], {}))
     assert [p["name"] for p in out["museum"]] == ["Natural History Museum"]
+
+
+def test_one_taste_does_not_badge_every_place(monkeypatch):
+    def place(i, name):
+        return {"entity_id": i, "name": name, "location": {"lat": 51.5, "lon": -0.13}, "tags": [{"id": "urn:tag:category:place:museum"}]}
+
+    async def get(path, params):
+        if "signal.interests.entities" in params:   # ranked by their one taste
+            return {"results": {"entities": [place(f"t{i}", f"Taste {i}") for i in range(12)]}}
+        return {"results": {"entities": [place("famous", "National Gallery")]}}
+    monkeypatch.setattr(qloo, "_get", get)
+    trip = agent.Trip({"lat": 51.5, "lon": -0.12, "country_code": "gb"}, "", "Harry Potter")
+    trip.signals, trip.tags = {"hp": "Harry Potter"}, {}
+    out = {p["name"]: p for p in asyncio.run(agent._taste_places(trip, ["museum"], {}))["museum"]}
+    assert out["Taste 0"].get("taste_match") and not out["National Gallery"].get("taste_match")
