@@ -1,0 +1,47 @@
+name: live demo check
+# Run by hand (Actions -> live demo check -> Run workflow): plans one real trip on the live site and checks it.
+# Costs one plan (about 20 Qloo requests).
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Live site
+        default: https://rihla-agent.vercel.app
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Health and the deployed version
+        run: |
+          curl -sS --fail "${{ inputs.url }}/api/health"; echo
+          curl -sS --fail "${{ inputs.url }}/" | grep -o 'app.js?v=[a-z0-9]*' | head -1
+          echo "repo: $(grep -o 'app.js?v=[a-z0-9]*' web/index.html | head -1)"
+          for ex in london-family istanbul-couple newyork-father-son; do
+            curl -sS --fail -o /dev/null -w "example $ex: %{http_code}\n" "${{ inputs.url }}/static/examples/$ex.json"
+          done
+      - name: Plan a real trip
+        run: |
+          curl -sS -N -m 300 -X POST "${{ inputs.url }}/api/plan/stream" -H 'Content-Type: application/json' \
+            -d '{"destination":"London","days":1,"travellers":"Family, kids aged 7 and 11","tastes":"The kids love dinosaurs and Harry Potter","language":"English"}' \
+            > plan.sse
+          python3 - <<'PY'
+          import json, sys
+          evs = [json.loads(l[6:]) for l in open("plan.sse") if l.startswith("data: ")]
+          for e in evs[:-1]:
+              print("step:", e.get("text") or e)
+          last = evs[-1] if evs else {"type": "nothing"}
+          if last["type"] != "done":
+              sys.exit(f"FAILED: {last}")
+          p = last["plan"]
+          print("\nseconds:", p.get("seconds"), "| model:", p.get("model"), "| fallback:", bool(p.get("fallback")), "| qloo:", p.get("qloo_mode"), p.get("qloo_calls"))
+          print("signals:", p.get("signals"), "| topics (Qloo tags):", p.get("topics"), "| audiences:", p.get("audiences"))
+          for t in p.get("trace", []):
+              print("trace:", t["tool"], "->", t.get("note") or t.get("found"))
+          for d in p["days"]:
+              print(f"\nDay {d['day']} {d.get('date')} {d.get('hijri')}")
+              for s in d["stops"]:
+                  print(f"  {s['time']} {s['kind']:7} {s.get('name')}  {s.get('topic') or ''} {s.get('because') or ''}")
+          print("\ntips:", p.get("tips"))
+          PY
