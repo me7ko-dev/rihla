@@ -106,6 +106,21 @@ def test_no_visit_during_or_just_before_a_prayer():
     assert times == {"Zoo": "16:05", "Mosque": "15:44", "Fountain": "18:25", "Mosque 2": "18:03"}
 
 
+def test_no_park_after_sunset_and_no_second_dinner():
+    final = {"days": [{"prayer_times": {"Maghrib": "18:11"}, "stops": [
+        {"time": "16:30", "kind": "sight", "name": "Central Park Zoo", "categories": ["zoo"]},
+        {"time": "17:00", "kind": "sight", "name": "Bethesda Fountain"},      # pushed past sunset by the zoo
+        {"time": "18:11", "kind": "prayer", "prayer": "Maghrib", "name": "Mosque"},
+        {"time": "19:00", "kind": "meal", "name": "Dinner"},
+        {"time": "20:00", "kind": "meal", "name": "Second dinner"},
+        {"time": "19:30", "kind": "sight", "name": "Museum at night"},        # indoors: stays
+        {"time": "21:00", "kind": "sight", "name": "Madison Square Garden", "categories": ["stadium"]},
+    ]}]}
+    agent._untangle(final)
+    assert [s["name"] for s in final["days"][0]["stops"]] == ["Central Park Zoo", "Mosque", "Dinner", "Museum at night",
+                                                              "Madison Square Garden"]
+
+
 def test_a_visit_moved_past_closing_time_is_left_out():
     final = {"days": [{"stops": [
         {"time": "15:25", "kind": "sight", "name": "Zoo", "open_today": "10:00–16:30"},   # after Asr it is closing

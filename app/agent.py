@@ -930,6 +930,10 @@ def _centre(day: dict, fallback: tuple[float, float]) -> tuple[float, float]:
 DURATION = {"sight": 75, "meal": 60, "prayer": 20, "rest": 45}  # minutes a stop usually takes
 MIN_STAY = 30  # a visit that would have less time than this before a prayer starts after the prayer instead
 LATEST = 21 * 60 + 30  # nothing new starts after 21:30
+MEAL_GAP = 150  # a second meal less than 2.5 hours after the first is one meal too many
+# parks, gardens, fountains, viewpoints: places to see in daylight
+OUTDOOR = re.compile(r"\b(park|garden|gardens|zoo|playground|fountain|square|bridge|viewpoint|beach|promenade|pier)\b", re.I)
+INDOOR = re.compile(r"museum|gallery|stadium|arena|mall|theat|aquarium|library|cinema", re.I)  # Madison Square Garden
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
@@ -1105,11 +1109,15 @@ def _untangle(final: dict, kids: bool = False) -> None:
     """No two stops at the same time, and time to get from one to the next: each stop starts when the previous
     one is over and the walk or ride is done. Prayers stay at their exact times; a visit or meal that would start
     during a prayer, or less than half an hour before it, starts after it (from the mosque). A visit that would
-    now start too late (after 21:30, or when the place is about to close) is left out."""
+    now start too late (after 21:30, when the place is about to close, a park after sunset) or a meal right after another
+    meal is left out."""
     for day in final.get("days", []):
         prayers = sorted((st for st in day["stops"] if st.get("kind") == "prayer"), key=lambda st: _mins(st.get("time", "")) or 0)
         others = sorted((st for st in day["stops"] if st.get("kind") != "prayer"), key=lambda st: _mins(st.get("time", "")) or 0)
         free, last, i, kept = 0, None, 0, []  # when and where the traveller is free again; the next prayer
+        sunset = _mins((day.get("prayer_times") or {}).get("Maghrib", "")) or \
+            next((_mins(p.get("time", "")) for p in prayers if p.get("prayer") == "Maghrib"), None)
+        ate, dropped = None, []  # when the last meal started; stops left out
         for st in others:
             want = _mins(st.get("time", "")) or 0
             while True:
@@ -1120,12 +1128,22 @@ def _untangle(final: dict, kids: bool = False) -> None:
                     break
                 free, last, i = max(free, start + (45 if p.get("jumuah") else DURATION["prayer"])), p, i + 1
             closes = _mins((st.get("open_today") or "").split("–")[-1])
-            if t > LATEST or (st.get("kind") == "sight" and closes and t >= closes - 45):
-                continue  # too late in the day, or the place closes before there is time to see it
+            words = " ".join([st.get("name") or ""] + list(st.get("categories") or []))
+            outdoor = (st.get("place_kind") == "park" or OUTDOOR.search(words)) and not INDOOR.search(words)
+            if t > LATEST or (st.get("kind") == "sight" and closes and t >= closes - 45) \
+                    or (st.get("kind") == "sight" and outdoor and sunset and t >= sunset) \
+                    or (st.get("kind") == "meal" and ate is not None and t - ate < MEAL_GAP):
+                dropped.append(st.get("name") or "")
+                continue  # too late, closing, dark outside, or just after another meal
+            if st.get("kind") == "meal":
+                ate = t
             if t != want:
                 st["time"] = _hhmm((t + 4) // 5 * 5)
             kept.append(st)
             free, last = (_mins(st["time"]) or t) + DURATION.get(st.get("kind"), 45), st
+        for st in kept:  # "a short walk from <a stop that was left out>"
+            if any(n and n in (st.get("why") or "") for n in dropped):
+                st["why"] = "A halal option close to your previous stop." if st.get("kind") == "meal" else _why(st)
         day["stops"] = sorted(kept + prayers, key=lambda st: (_mins(st.get("time", "")) or 0, st.get("kind") != "prayer"))
 
 
