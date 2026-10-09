@@ -33,6 +33,7 @@ Qloo is behind every kind of stop, not just one feature:
 | Your favourites become taste signals ("Harry Potter" → the book, not the album) | `/search`, ranked by name match, type and Qloo popularity |
 | Sights ranked by your taste **and** by Qloo audiences *Islam* and *Parents with young children* | `/v2/insights` with `signal.interests.entities` + `signal.demographics.audiences` |
 | Honest "because you love X": each taste is also asked on its own; a place carries the badge only if it is in that taste's own top results | `/v2/insights`, one query per signal |
+| Topics you wrote ("dinosaurs", "calligraphy") become Qloo tags and rank places too; *Known for dinosaurs* only when Qloo tags the place with it | `/v2/tags` → `signal.interests.tags` |
 | Famous highlights next to personal finds | `/v2/insights` without signals |
 | Halal restaurants ranked by your taste; "listed" (halal-restaurant category) vs "mentioned" (reviews) | `filter.tags=urn:tag:cuisine:qloo:halal`, place tags |
 | No bars, pubs, nightclubs, meyhanes — excluded on Qloo's side | `filter.exclude.tags` |

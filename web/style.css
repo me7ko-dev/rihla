@@ -137,6 +137,7 @@ main{padding:28px 20px 10px}
 .taste{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:12px;font-size:12.5px}
 .taste b{color:var(--ink);font-weight:600;margin-right:2px}
 .taste .sig{background:#EEE9FB;color:#5B3FA8;border-radius:999px;padding:3px 10px;font-weight:600}
+.taste .sig.tag{background:#FFF;border:1px solid #CFC3F0}
 .taste .aud{background:#E7F1EC;color:var(--prayer);border-radius:999px;padding:3px 10px;font-weight:600}
 @media (max-width:520px){.thumb{width:64px;height:64px}}
 .badge.kids{background:#E6F0FA;color:#2F6FB3}

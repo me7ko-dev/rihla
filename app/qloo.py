@@ -214,12 +214,15 @@ async def search(query: str, kind: str | None = None, take: int = 3) -> list[dic
 
 async def insights(kind: str, *, interests: list[str] | None = None, audiences: list[str] | None = None,
                    lat: float | None = None, lon: float | None = None, radius_m: int = 4000,
-                   tags: tuple | list | None = None, exclude_tags: tuple | list | None = None, take: int = 20) -> list[dict]:
-    """Taste-based recommendations of one entity type, optionally around a point.
-    Places never include alcohol-centred venues."""
+                   tags: tuple | list | None = None, exclude_tags: tuple | list | None = None, take: int = 20,
+                   signal_tags: list[str] | None = None) -> list[dict]:
+    """Taste-based recommendations of one entity type, optionally around a point; signal_tags are Qloo tags the
+    traveller cares about ("dinosaurs") used as taste signals. Places never include alcohol-centred venues."""
     params: dict = {"filter.type": TYPES.get(kind, kind), "take": min(take, 50)}
     if interests:
         params["signal.interests.entities"] = ",".join(interests[:10])
+    if signal_tags:
+        params["signal.interests.tags"] = ",".join(signal_tags[:10])
     if audiences:
         params["signal.demographics.audiences"] = ",".join(audiences)
     if lat is not None and lon is not None:
@@ -261,8 +264,16 @@ async def locate(name: str) -> dict | None:
             "lat": float(loc["lat"]), "lon": float(loc["lon"]), "country_code": (geo.get("country_code") or "").lower()}
 
 
-async def find_tags(query: str, take: int = 5) -> list[dict]:
-    data = await _get("/v2/tags", {"filter.query": query, "feature.semantic_search": "true", "take": take})
+async def find_tags(query: str, take: int = 5, places: bool = False) -> list[dict]:
+    """Qloo tags for a word ("dinosaurs" -> the tag places carry when they are known for dinosaurs);
+    places=True asks for tags that places carry (and falls back to all tags if Qloo refuses the filter)."""
+    params = {"filter.query": query, "feature.semantic_search": "true", "take": take}
+    try:
+        data = await _get("/v2/tags", dict(params, **{"filter.parents.types": TYPES["place"]}) if places else params)
+    except QlooError:
+        if not places:
+            raise
+        data = await _get("/v2/tags", params)
     return [{"id": t.get("id") or t.get("tag_id"), "name": t.get("name"), "type": t.get("type") or t.get("subtype")}
             for t in _entities(data)]
 

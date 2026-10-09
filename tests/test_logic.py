@@ -315,3 +315,55 @@ def test_mock_qloo_without_key(monkeypatch):
     monkeypatch.setattr(qloo.config, "QLOO_MOCK", True)
     found = asyncio.run(qloo.search("Orhan Pamuk"))
     assert found and found[0]["name"] == "Orhan Pamuk"
+
+
+# ---------- Qloo tags for the topics they wrote ----------
+def test_topics_become_qloo_tags_only_when_the_name_matches(monkeypatch):
+    async def find_tags(word, take=5, places=False):
+        return {"dinosaur": [{"id": "urn:tag:keyword:qloo:dinosaurs", "name": "Dinosaurs"},
+                             {"id": "urn:tag:keyword:qloo:fossils", "name": "Fossils"}],   # a semantic neighbour: not used
+                "calligraphy": [{"id": "urn:tag:keyword:qloo:calligraphy", "name": "Islamic calligraphy"}]}.get(word, [])
+    monkeypatch.setattr(agent.qloo, "find_tags", find_tags)
+    trip = agent.Trip({"lat": 51.5, "lon": -0.12, "country_code": "gb"}, "", "The kids love dinosaurs and Harry Potter, I love calligraphy")
+    trip.signals["e1"] = "Harry Potter"   # already a Qloo entity: its words are not looked up as tags
+    tags = asyncio.run(agent._topic_tags(trip))
+    assert tags == {"urn:tag:keyword:qloo:dinosaurs": "dinosaurs", "urn:tag:keyword:qloo:calligraphy": "calligraphy"}
+    museum = {"id": "m", "name": "Natural History Museum", "lat": 51.496, "lon": -0.176,
+              "tag_ids": ["urn:tag:keyword:qloo:dinosaurs"], "known_for": []}
+    assert agent._qplace(museum, "museum", trip, 51.5, -0.12)["topic"] == ["dinosaurs"]
+
+
+def test_tags_are_sent_as_taste_signals(monkeypatch):
+    sent = {}
+
+    async def get(path, params):
+        sent.update(params)
+        return {"results": {"entities": []}}
+    monkeypatch.setattr(qloo, "_get", get)
+    asyncio.run(qloo.insights("place", interests=["e1"], signal_tags=["urn:tag:keyword:qloo:dinosaurs"]))
+    assert sent["signal.interests.tags"] == "urn:tag:keyword:qloo:dinosaurs" and sent["signal.interests.entities"] == "e1"
+
+
+def test_tag_search_works_if_qloo_refuses_the_place_filter(monkeypatch):
+    calls = []
+
+    async def get(path, params):
+        calls.append(params)
+        if "filter.parents.types" in params:
+            raise qloo.QlooError("Qloo /v2/tags -> HTTP 400")
+        return {"results": {"tags": [{"id": "urn:tag:keyword:qloo:dinosaurs", "name": "Dinosaurs"}]}}
+    monkeypatch.setattr(qloo, "_get", get)
+    assert asyncio.run(qloo.find_tags("dinosaurs", places=True))[0]["name"] == "Dinosaurs" and len(calls) == 2
+
+
+def test_places_still_come_if_qloo_refuses_tag_signals(monkeypatch):
+    async def get(path, params):
+        if "signal.interests.tags" in params:
+            raise qloo.QlooError("Qloo /v2/insights -> HTTP 400")
+        return {"results": {"entities": [{"entity_id": "p1", "name": "Natural History Museum", "location": {"lat": 51.496, "lon": -0.176},
+                                          "tags": [{"id": "urn:tag:category:place:museum"}]}]}}
+    monkeypatch.setattr(qloo, "_get", get)
+    trip = agent.Trip({"lat": 51.5, "lon": -0.12, "country_code": "gb"}, "", "dinosaurs")
+    trip.tags = {"urn:tag:keyword:qloo:dinosaurs": "dinosaurs"}
+    out = asyncio.run(agent._taste_places(trip, ["museum"], {}))
+    assert [p["name"] for p in out["museum"]] == ["Natural History Museum"]

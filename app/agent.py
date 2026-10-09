@@ -224,6 +224,7 @@ class Trip:
         self.kids = bool(KIDS.search(travellers or "")) and (not ages or min(ages) <= 12) or \
             bool(BABY.search(travellers or "")) or any(a <= 12 for a in stated)
         self.audiences = [qloo.AUDIENCES["muslim"]] + ([qloo.AUDIENCES["kids"]] if self.kids else [])
+        self.tags: dict[str, str] | None = None  # Qloo tags for the topics they wrote: tag id -> the word as written
         self.osm_task: asyncio.Task | None = None
         self._osm: dict | None = None
         self._osm_by: float | None = None
@@ -306,7 +307,8 @@ def _qplace(it: dict, kind: str, trip: Trip, lat: float, lon: float, because: li
     """A Qloo place as Rihla's place dict; 'because' = the traveller's tastes it matches."""
     because = because or []
     hits = [_as_written(trip.tastes, k) for k in it.get("known_for") or []
-            if trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())}][:2]
+            if trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())}]
+    hits = list(dict.fromkeys(hits + [trip.tags[t] for t in it.get("tag_ids") or [] if t in (trip.tags or {})]))[:2]
     p = {k: it.get(k) for k in ("name", "lat", "lon", "address", "image", "website", "rating", "categories", "affinity",
                                 "description", "known_for", "hours")}
     p["kids_ok"] = (it.get("kids") or 0) >= 0.3
@@ -479,6 +481,32 @@ def _key(name: str) -> str:
     return " ".join(re.sub(r"^the\s+", "", halal._norm(name)).split())
 
 
+TOPIC_TAGS = 4  # topics looked up in Qloo's tags per trip
+
+
+async def _topic_tags(trip: Trip) -> dict[str, str]:
+    """The topics they wrote ("dinosaurs", "calligraphy", "Ottoman history") as Qloo tags, so places are ranked by
+    them on Qloo's side too. A tag counts only if its name is the word they wrote (no loose semantic neighbours)."""
+    if trip.tags is not None:
+        return trip.tags
+    text = trip.tastes.lower()
+    named = {_singular(w) for n in trip.signals.values() for w in re.findall(r"[a-z]{4,}", n.lower())}  # already signals
+    words = sorted(trip.topics - named, key=lambda w: (text.find(w) if w in text else len(text)))[:TOPIC_TAGS]
+    found = await asyncio.gather(*[qloo.find_tags(w, take=8, places=True) for w in words], return_exceptions=True)
+    trip.tags = {}
+    for w, tags in zip(words, found):
+        m = re.search(r"\b" + re.escape(w) + r"\w*", trip.tastes, re.I)  # "dinosaur" -> "dinosaurs", as they wrote it
+        written = m.group(0) if m else w
+        for t in tags if isinstance(tags, list) else []:
+            name = str(t.get("name") or "").lower()
+            if t.get("id") and w in {_singular(x) for x in re.findall(r"[a-z]{4,}", name)}:
+                trip.tags[t["id"]] = written
+    if trip.tags:
+        trip.trace.append({"tool": "topic_tags", "args": {"topics": words}, "found": len(trip.tags),
+                           "note": "Qloo tags used as taste signals: " + ", ".join(dict.fromkeys(trip.tags.values()))})
+    return trip.tags
+
+
 async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
     """Qloo places per category, ranked by all the traveller's taste signals together. Each signal is also
     asked on its own: a place is "because" of a taste when it is in that taste's own top 10, and every taste
@@ -494,7 +522,17 @@ async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
             (() if "shopping" in cats else qloo._cat("clothing_store", "department_store", "shopping_mall", "gift_shop"))
     ask = dict(audiences=trip.audiences, lat=lat, lon=lon, radius_m=radius, exclude_tags=avoid)
     solo = refs[:5] if len(refs) > 1 else []
-    res = await asyncio.gather(qloo.insights("place", interests=refs, tags=union, take=50, **ask),
+    topic_ids = list(await _topic_tags(trip))
+
+    async def ranked():  # with their topics as tag signals; as before if Qloo refuses them
+        try:
+            return await qloo.insights("place", interests=refs, tags=union, take=50, signal_tags=topic_ids, **ask)
+        except qloo.QlooError:
+            if not topic_ids:
+                raise
+            log.warning("Qloo refused the topic tags %s", topic_ids)
+            return await qloo.insights("place", interests=refs, tags=union, take=50, **ask)
+    res = await asyncio.gather(ranked(),
                                qloo.insights("place", tags=union, take=30, lat=lat, lon=lon, radius_m=radius,
                                              exclude_tags=avoid),  # the city's best-loved places: no taste, no audience
                                *[qloo.insights("place", interests=[r], tags=union, take=20, **ask) for r in solo],
@@ -507,7 +545,8 @@ async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
     everything = {it["id"]: it for lst in [together, famous, *own.values()] for it in lst}
 
     def topic(it: dict) -> bool:
-        return any(trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())} for k in it.get("known_for") or [])
+        return bool(set(it.get("tag_ids") or ()) & set(topic_ids)) or \
+            any(trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())} for k in it.get("known_for") or [])
     top10 = {r: [it["id"] for it in items[:10]] for r, items in own.items()}
 
     def because(pid: str) -> list[str]:
@@ -1341,6 +1380,7 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
         final.setdefault("tips", []).insert(0, "Prayer times could not be loaded just now: please check the times at a local mosque.")
     final["trace"] = trip.trace
     final["signals"] = list(trip.signals.values())
+    final["topics"] = list(dict.fromkeys((trip.tags or {}).values()))  # their topics Qloo knows as tags
     final["audiences"] = ["Islam"] + (["Parents with young children"] if trip.kids else [])
     final["qloo_mode"] = "mock" if config.QLOO_MOCK else "live"
     final["model"] = trip.model

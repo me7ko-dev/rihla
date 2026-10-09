@@ -230,9 +230,10 @@ function render(plan) {
     '<span>🍽️ ' + meals + ' halal-aware meals' + (verified ? ' (' + verified + ' listed halal)' : '') + '</span>' +
     (local ? '<span title="' + esc(plan.timezone) + '">🕒 Local times · ' + esc(local) + '</span>' : '') +
     (plan.seconds ? '<span>⏱️ planned in ' + plan.seconds + ' s</span>' : '') + '</div>' +
-    ((plan.signals && plan.signals.length) || (plan.audiences && plan.audiences.length) ?
+    ((plan.signals && plan.signals.length) || (plan.topics && plan.topics.length) || (plan.audiences && plan.audiences.length) ?
       '<div class="taste"><b>Your Qloo taste profile</b>' +
       (plan.signals || []).map(function (x) { return '<span class="sig">' + esc(x) + '</span>'; }).join('') +
+      (plan.topics || []).map(function (x) { return '<span class="sig tag" title="A Qloo tag used as a taste signal">#' + esc(x) + '</span>'; }).join('') +
       (plan.audiences || []).map(function (x) { return '<span class="aud">' + esc(x) + '</span>'; }).join('') + '</div>' : '');
   var h = '';
   plan.days.forEach(function (day, di) {
