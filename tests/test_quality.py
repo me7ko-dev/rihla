@@ -373,3 +373,13 @@ def test_one_dinner_however_late_the_second():
                                         ({"name": "Hiba Express", "categories": ["lebanese restaurant"]}, False)])
 def test_a_supermarket_is_not_a_meal(place, out):
     assert agent._not_food(place) == out
+
+
+def test_a_burger_chain_gives_way_to_a_local_place_nearby():
+    t = trip()
+    t.keep("q:local", {"name": "Restoran Yasmin", "lat": 51.5001, "lon": -0.12, "halal_level": "likely"}, "qloo", "halal")
+    day = {"date": "2026-10-17", "stops": [{"time": "18:00", "kind": "sight", "name": "Park", "lat": 51.5, "lon": -0.1201},
+                                          {"time": "19:00", "kind": "meal", "ref": "q:jb", "name": "Jollibee", "lat": 51.5, "lon": -0.12,
+                                           "halal_level": "likely"}]}
+    asyncio.run(agent._check_meals({"days": [day]}, t))
+    assert day["stops"][1]["name"] == "Restoran Yasmin"

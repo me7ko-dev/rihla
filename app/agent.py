@@ -1149,7 +1149,8 @@ INDOOR = re.compile(r"museum|gallery|stadium|arena|mall|theat|aquarium|library|c
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 # a burger chain is never the taste-matched meal Rihla promises (it may still be the only halal option nearby)
 CHAINS = re.compile(r"\b(mcdonald'?s|burger king|kfc|subway|starbucks|domino'?s|pizza hut|dunkin'?|popeyes|taco bell|"
-                    r"wendy'?s|papa john'?s|little caesars|tim hortons|costa coffee|five guys|hardee'?s|carl'?s jr)\b", re.I)
+                    r"wendy'?s|papa john'?s|little caesars|tim hortons|costa coffee|five guys|hardee'?s|carl'?s jr|jollibee|"
+                    r"texas chicken|marrybrown|wingstop|panda express|dairy queen)\b", re.I)
 
 
 def _opening(p: dict, date: str | None) -> tuple[int, int] | None | bool:
@@ -1375,8 +1376,8 @@ def _fill_days(final: dict, trip: Trip) -> None:
                 if snack is not None:
                     day["stops"].remove(snack)
                     continue
-            # below the target any empty stretch is filled; at the target only a long one (2.5 hours or more)
-            if not gaps or (have_sights >= target and max(gaps)[0] < 150):
+            # below the target any empty stretch is filled; at the target only a long one (2 hours or more)
+            if not gaps or (have_sights >= target and max(gaps)[0] < 120):
                 break
             start = (max(gaps)[1] + 10 + 14) // 15 * 15
             here = _near_stop(day, start, home)
@@ -1516,6 +1517,7 @@ async def _check_meals(final: dict, trip: Trip) -> int:
             # a family meal at a place with a bar: an equally sure place without alcohol nearby is better
             drinks = bool(st.get("alcohol"))
             twice = _chain_in(st.get("name", ""), seen_brands)  # another branch of a chain already in the trip
+            twice = twice or bool(CHAINS.search(st.get("name") or ""))  # a burger chain: a local place nearby is better
             seen_brands |= {_brand(st.get("name", "")), _key(st.get("name", ""))}
             if not far and not closed and not drinks and not twice:
                 continue
@@ -1525,7 +1527,8 @@ async def _check_meals(final: dict, trip: Trip) -> int:
             def options():
                 return [x for x in trip.near("halal", *here, reach, 40) if _key(x["name"]) not in used and x["ref"] != st.get("ref")
                         and not _chain_in(x["name"], used | seen_brands) and RANK.get(x.get("halal_level"), 3) <= rank
-                        and _open_at(x, day.get("date"), t) and not x.get("closed_for_good") and not (drinks and x.get("alcohol"))]
+                        and _open_at(x, day.get("date"), t) and not x.get("closed_for_good") and not (drinks and x.get("alcohol"))
+                        and not CHAINS.search(x.get("name") or "")]
             if not options() and (far or closed):  # nothing looked up around here yet: ask Qloo and OpenStreetMap
                 await _safe_tool(trip, "halal_food_near", {"lat": here[0], "lon": here[1], "radius_m": 1200})
             food = min(options(), key=lambda x: _meal_score(x, cc), default=None)
