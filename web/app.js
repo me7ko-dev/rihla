@@ -270,7 +270,7 @@ function render(plan, city) {
       if (s.kids_ok && s.kind !== 'prayer') badges += '<span class="badge kids">Good for kids</span>';
       if (s.open_today) badges += '<span class="badge k" title="Opening hours that day (Qloo)">Open ' + esc(s.open_today) + '</span>';
       if (s.alcohol && s.kind === 'meal') badges += '<span class="badge alc" title="Qloo lists alcohol at this place">Serves alcohol</span>';
-      if (s.cuisine) badges += '<span class="badge k">' + esc(s.cuisine) + '</span>';
+      if (s.cuisine) badges += '<span class="badge k">' + esc(String(s.cuisine).replace(/_/g, ' ')) + '</span>';
       else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(s.categories[0]) + '</span>';
       if (s.jumuah) badges = '<span class="badge jumuah">Jumu\'ah · Friday prayer</span>' + badges;
       var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
@@ -333,7 +333,10 @@ function companion(plan, city) {
 function startPreview(day) {
   var d = comp.plan.days[day] || comp.plan.days[0], dh = mm((d.prayer_times || {}).Dhuhr);
   comp.mode = 'preview'; comp.day = comp.plan.days.indexOf(d);
-  comp.mins = dh ? Math.round((dh - 40) / 5) * 5 : 690;  // a little before Dhuhr: something now, a prayer next
+  // a little before Dhuhr, while visiting a place: something now, a prayer next
+  var at = d.stops.filter(function (s) { var t = mm(s.time); return s.kind !== 'prayer' && t != null && (!dh || t < dh); }).pop();
+  comp.mins = at ? mm(at.time) + Math.min(30, Math.max(5, (dh || 1440) - mm(at.time) - 40)) : dh ? dh - 40 : 690;
+  comp.mins = Math.round(comp.mins / 5) * 5;
   drawCompanion();
 }
 function drawCompanion() {
@@ -429,7 +432,7 @@ function drawBody() {
       if (p.topic && p.topic.length) b += '<span class="badge topic">Known for ' + esc(p.topic.join(' & ')) + '</span>';
       if (p.popular && comp.tab === 'sights') b += '<span class="badge must">Must-see</span>';
       if (p.kids_ok && kids && comp.tab !== 'mosques') b += '<span class="badge kids">Good for kids</span>';
-      if (p.cuisine) b += '<span class="badge k">' + esc(p.cuisine) + '</span>';
+      if (p.cuisine) b += '<span class="badge k">' + esc(String(p.cuisine).replace(/_/g, ' ')) + '</span>';
       else if (p.categories && p.categories.length && comp.tab === 'sights') b += '<span class="badge k">' + esc(p.categories[0]) + '</span>';
       return '<li><button type="button" class="cp-show" data-lat="' + p.lat + '" data-lon="' + p.lon + '" data-name="' + esc(p.name) + '">' + esc(p.name) + '</button>' +
         (p._inPlan ? ' <span class="cp-inplan">in your plan</span>' : '') + '<span class="cp-sub"> · ' + w.text + '</span>' +
