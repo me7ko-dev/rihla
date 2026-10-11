@@ -176,3 +176,48 @@ main{padding:28px 20px 10px}
 .how p{margin:0;color:var(--soft);font-size:14px}
 @media (max-width:900px){.how-grid{grid-template-columns:1fr 1fr}}
 @media (max-width:520px){.how-grid{grid-template-columns:1fr}}
+/* Today: the companion on the day of the trip (and its preview) */
+.companion{padding:18px 20px;margin-bottom:18px;border-color:var(--gold)}
+.companion h3{font:600 21px/1.2 Fraunces,Georgia,serif;margin:0}
+.companion h4{margin:0 0 6px;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft)}
+.cp-teaser{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.cp-teaser>div{flex:1 1 380px;min-width:0}
+.cp-teaser p{margin:6px 0 0;color:var(--soft);font-size:14px}
+.cp-try{font:600 15px Inter,sans-serif;border:0;border-radius:12px;padding:12px 16px;min-height:44px;background:var(--teal);color:#fff;cursor:pointer;white-space:nowrap}
+.cp-try:hover{background:var(--teal-2)}
+.cp-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.cp-prev{display:inline-block;vertical-align:3px;font:700 12px/1 Inter,system-ui,sans-serif;background:#EEE9FB;color:#5B3FA8;border-radius:999px;padding:5px 9px;margin-right:4px}
+.cp-x{font:inherit;font-size:22px;line-height:1;border:0;background:none;cursor:pointer;color:var(--soft);min-width:44px;min-height:44px}
+.cp-ctl{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;margin:10px 0 4px;padding:10px 12px;background:#F6F1E6;border-radius:12px}
+.cp-days{display:flex;gap:6px;flex-wrap:wrap}
+.cp-days button,.cp-tabs button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:5px 12px;min-height:34px;cursor:pointer;color:var(--teal)}
+.cp-days button.on,.cp-tabs button.on{background:var(--teal);border-color:var(--teal);color:#fff}
+.cp-slide{display:flex;align-items:center;gap:10px;flex:1 1 260px;font-size:13.5px;color:var(--soft)}
+.cp-slide b{color:var(--ink);font-variant-numeric:tabular-nums;min-width:42px}
+.cp-slide input{flex:1;accent-color:var(--teal);min-width:0}
+.cp-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:12px;margin-top:12px}
+.cp-box{border:1px solid var(--line);border-radius:14px;padding:12px 14px;background:#fff;min-width:0}
+.cp-box.pray{background:#F1F8F4;border-color:#CFE5DA}
+.cp-big{margin:0;font:600 18px/1.25 Fraunces,Georgia,serif}
+.cp-name{margin:4px 0 0;font-weight:600}
+.cp-sub{margin:2px 0 0;color:var(--soft);font-size:13px}
+.cp-count{color:var(--prayer);font-weight:600}
+.cp-next{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
+.cp-k{font-size:12.5px;font-weight:600;color:var(--meal)}
+.cp-near{margin-top:14px}
+.cp-near-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.cp-near-h h4{margin:0}
+.cp-loc{font:600 13px Inter,sans-serif;border:1px solid var(--teal);background:#fff;color:var(--teal);border-radius:10px;padding:6px 12px;min-height:36px;cursor:pointer}
+.cp-loc:disabled{opacity:.6;cursor:wait}
+.cp-msg{margin:8px 0 0;font-size:13px;background:#FBEFD2;color:#7A5200;border-radius:10px;padding:6px 10px}
+.cp-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px}
+.cp-list{list-style:none;margin:0;padding:0}
+.cp-list li{padding:10px 0;border-bottom:1px solid #EFE8DA}
+.cp-list li:last-child{border-bottom:0}
+.cp-show{font:600 15px Inter,sans-serif;border:0;background:none;padding:0;color:var(--ink);cursor:pointer;text-align:left}
+.cp-show:hover{color:var(--teal-2);text-decoration:underline}
+.cp-inplan{font-size:11.5px;font-weight:600;color:var(--teal);background:#E7F1EC;border-radius:999px;padding:1px 8px}
+.cp-note{font-size:12px;color:var(--soft);margin:8px 0 0}
+.here-icon{width:18px;height:18px;border-radius:50%;background:#1A73E8;border:3px solid #fff;box-shadow:0 0 0 6px rgba(26,115,232,.25),0 2px 6px rgba(0,0,0,.3)}
+@media (max-width:640px){.cp-grid{grid-template-columns:minmax(0,1fr)}.companion{padding:16px 14px}}
+@media (pointer:coarse){.cp-days button,.cp-tabs button,.cp-loc{min-height:44px}}

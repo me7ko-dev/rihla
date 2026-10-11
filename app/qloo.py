@@ -60,8 +60,9 @@ SERVES_ALCOHOL = {"urn:tag:offerings:place:alcohol", "urn:tag:offerings:place:ha
 KIDS_TAG = "urn:tag:children:place:good_kids"
 AUDIENCES = {"muslim": "urn:audience:lifestyle_preferences_beliefs:islam",
              "kids": "urn:audience:life_stage:parents_with_young_children"}
+# Turkish names add endings: "Ege Rum Meyhanesi", "Taksim Birahanesi", "Bira Evi"
 _ALCOHOL_NAME = re.compile(r"\b(bar|pub|brewery|brewpub|taproom|tavern|winery|wine|cocktails?|nightclub|night club|"
-                           r"beer|liquor|saloon|casino|meyhane|izakaya|biergarten)\b", re.I)
+                           r"beer|liquor|saloon|casino|meyhane\w*|birahane\w*|bira|izakaya|biergarten)\b", re.I)
 
 
 class QlooError(RuntimeError):

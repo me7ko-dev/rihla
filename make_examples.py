@@ -53,6 +53,16 @@ async def main() -> None:
                 best = plan
         if not best:
             continue
+        # a richer example from an earlier run stays; it gets the places around it from this run (same trip, same Qloo data)
+        try:
+            old = json.loads((OUT / f"{key}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            old = None
+        if old and richness(old) > richness(best):
+            used = {s["name"].lower() for d in old["days"] for s in d["stops"]}
+            old["nearby"] = {k: [p for p in v if p["name"].lower() not in used] for k, v in best.get("nearby", {}).items()}
+            print(f"{key}: the earlier plan is richer ({richness(old):.1f}) — kept, with this run's places around it", flush=True)
+            best = old
         best["example"] = dict(ex, id=key)
         best.pop("llm_log", None)
         (OUT / f"{key}.json").write_text(json.dumps(best, ensure_ascii=False), encoding="utf-8")

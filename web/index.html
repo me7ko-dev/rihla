@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri:wght@700&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/style.css?v=tags1">
+<link rel="stylesheet" href="/static/style.css?v=today1">
 </head>
 <body>
 <header class="hero">
@@ -22,7 +22,7 @@
       <h1>A travel agent that knows your taste <em>and respects your faith.</em></h1>
       <p class="lead">Tell Rihla where you are going and what you love. It finds places that match your taste with the Qloo taste graph, halal food you can trust, mosques nearby — and builds each day around the five prayers.</p>
       <ul class="pills">
-        <li>🎯 Taste-matched places</li><li>🍽️ Halal with honest confidence</li><li>🕌 Prayer-aware schedule</li><li>👨‍👩‍👧 Family friendly, no bars</li>
+        <li>🎯 Taste-matched places</li><li>🍽️ Halal with honest confidence</li><li>🕌 Prayer-aware schedule</li><li>👨‍👩‍👧 Family friendly, no bars</li><li>📱 A companion on the day</li>
       </ul>
       <p class="peek"><button type="button" data-ex="london-family">See a finished plan: London with kids →</button></p>
     </div>
@@ -90,6 +90,7 @@
 
 <main class="wrap" id="result" hidden>
   <section class="sum card" id="sum"></section>
+  <section class="card companion" id="companion" aria-label="Today: your trip companion" hidden></section>
   <div class="split">
     <section id="days" class="days"></section>
     <aside class="mapbox"><div class="daybar" id="daybar"></div><div id="map"></div><p class="legend"><i class="d sight"></i>Sight <i class="d meal"></i>Meal <i class="d prayer"></i>Prayer</p></aside>
@@ -114,6 +115,6 @@
 </footer>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/app.js?v=tags1"></script>
+<script src="/static/app.js?v=today1"></script>
 </body>
 </html>

@@ -103,13 +103,13 @@ function openTrip(x) {
   ['destination', 'travellers', 'tastes', 'language', 'start'].forEach(function (k) { if (r[k]) form[k].value = r[k]; });
   if (r.days) form.days.value = String(r.days);
   $('#err').hidden = true;
-  render(x.plan);
+  render(x.plan, r.destination);
   // during the trip: straight to today, on the map and in the list
   var t = tripToday(x.plan);
   if (t.day != null) {
-    var b = document.querySelector('#daybar button[data-d="' + t.day + '"]'), card = document.querySelectorAll('#days .day')[t.day];
+    var b = document.querySelector('#daybar button[data-d="' + t.day + '"]'), box = $('#companion');
     if (b) b.click();
-    if (card) card.scrollIntoView({ behavior: 'smooth' });
+    if (box) box.scrollIntoView({ behavior: 'smooth' });
   }
 }
 if ($('#trips')) $('#trips').addEventListener('click', function (e) {
@@ -195,7 +195,7 @@ form.addEventListener('submit', function (e) {
     .then(function (plan) {
       finish();
       try { saveTrip(plan, body); } catch (e) { }  // saving is a bonus: the plan is shown whatever happens
-      render(plan);
+      render(plan, body.destination);
     })
     .catch(function (err) { finish(); $('#err').textContent = err.message; $('#err').hidden = false; });
 });
@@ -214,7 +214,7 @@ function errorText(status, text) {
     : 'Something went wrong (' + status + '). Please try again.';
 }
 
-function render(plan) {
+function render(plan, city) {
   $('#result').hidden = false;
   $('#how').hidden = true;
   var n = 0, stops = 0, meals = 0, verified = 0, today = tripToday(plan), kids = youngKids(plan), rule = kids ? WALK.kids : WALK.adults;
@@ -291,6 +291,7 @@ function render(plan) {
     return '<li><code>' + esc(t.tool) + '</code> ' + esc(what) + (t.note ? ' → ' + esc(t.note) : ' → ' + t.found + ' found') + '</li>';
   }).join('');
   drawMap(plan);
+  companion(plan, city);
   document.querySelectorAll('.stop').forEach(function (el) {
     el.addEventListener('click', function (e) {
       if (e.target.closest('a')) return; // a directions link opens the map app, not our map
@@ -301,6 +302,200 @@ function render(plan) {
     });
   });
   $('#result').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ---- Today: on the day of the trip Rihla is a companion — what is now and next, the next prayer and its mosque,
+// halal food and mosques around you. Everything comes from the places Qloo (and OpenStreetMap) already found for
+// this plan (plan.nearby), so it costs no new requests and works on weak internet. Before the trip: a preview.
+var DUR = { sight: 75, meal: 60, prayer: 20, rest: 45 };  // minutes a stop usually takes (as on the server)
+var PRAYERS = ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'], RANK = { verified: 0, likely: 1, unknown: 2 };
+var comp = { plan: null, day: 0, mins: 0, mode: 'teaser', here: null, msg: '', tab: 'halal', timer: null, pin: null };
+function mm(t) { var m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; }
+function hm(m) { m = ((m % 1440) + 1440) % 1440; return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + m % 60).slice(-2); }
+function inMin(n) { return n < 60 ? n + ' min' : Math.floor(n / 60) + ' h' + (n % 60 ? ' ' + n % 60 + ' min' : ''); }
+function far(m) { return m < 1000 ? Math.max(10, Math.round(m / 10) * 10) + ' m' : (m / 1000).toFixed(1) + ' km'; }
+
+function companion(plan, city) {
+  clearInterval(comp.timer);
+  comp.city = city || '';
+  comp.plan = plan; comp.here = null; comp.msg = '';
+  if (comp.pin) { comp.pin.remove(); comp.pin = null; }
+  var t = tripToday(plan);
+  if (t.day != null) {
+    comp.mode = 'live'; comp.day = t.day; comp.mins = nowIn(plan.timezone).mins;
+    comp.timer = setInterval(function () {
+      if (comp.mode !== 'live') return;
+      comp.mins = nowIn(plan.timezone).mins; drawBody();
+    }, 30000);
+  } else comp.mode = 'teaser';
+  drawCompanion();
+}
+function startPreview(day) {
+  var d = comp.plan.days[day] || comp.plan.days[0], dh = mm((d.prayer_times || {}).Dhuhr);
+  comp.mode = 'preview'; comp.day = comp.plan.days.indexOf(d);
+  comp.mins = dh ? Math.round((dh - 40) / 5) * 5 : 690;  // a little before Dhuhr: something now, a prayer next
+  drawCompanion();
+}
+function drawCompanion() {
+  var box = $('#companion'), plan = comp.plan;
+  if (!box || !plan) return;
+  box.hidden = false;
+  if (comp.mode === 'teaser') {
+    var t = tripToday(plan);
+    box.className = 'card companion teaser';
+    box.innerHTML = '<div class="cp-teaser"><div><h3>📱 On the day, Rihla walks with you</h3><p>Open this plan on your phone during the trip' +
+      (t.inDays ? ' (it starts ' + (t.inDays === 1 ? 'tomorrow' : 'in ' + t.inDays + ' days') + ')' : '') +
+      ': what is now and next, a countdown to the next prayer with the nearest mosque, and halal food around you — ' +
+      'from the places Qloo already found for this plan, even on weak internet.</p></div>' +
+      '<button type="button" class="cp-try" data-preview="0">▶ Preview Day 1 now</button></div>';
+    return;
+  }
+  var city = esc(cityOf(plan));
+  box.className = 'card companion';
+  box.innerHTML = '<div class="cp-head"><h3>' + (comp.mode === 'live' ? '<span class="today-tag">Today</span> ' : '<span class="cp-prev">Preview</span> ') +
+    'in ' + city + '</h3>' + (comp.mode === 'preview' ? '<button type="button" class="cp-x" data-close="1" aria-label="Close the preview">×</button>' : '') + '</div>' +
+    (comp.mode === 'preview' ? '<div class="cp-ctl"><div class="cp-days">' + plan.days.map(function (d, i) {
+      return '<button type="button" data-pday="' + i + '"' + (i === comp.day ? ' class="on"' : '') + '>Day ' + d.day + '</button>';
+    }).join('') + '</div><label class="cp-slide">Pretend it is <b id="cp-time">' + hm(comp.mins) + '</b>' +
+      '<input type="range" id="cp-range" min="360" max="1395" step="5" value="' + comp.mins + '" aria-label="Time of day"></label></div>' : '') +
+    '<div id="cp-body"></div>';
+  drawBody();
+}
+// where the traveller is: their phone's location (if they shared it and are in the city), else the stop they are at
+function whereNow(stops) {
+  if (comp.here) return comp.here;
+  var at = null;
+  stops.forEach(function (s) { if (s.lat != null && mm(s.time) <= comp.mins) at = s; });
+  at = at || stops.filter(function (s) { return s.lat != null; })[0];
+  return at ? { lat: at.lat, lon: at.lon, label: at.name } : { lat: comp.plan.destination.lat, lon: comp.plan.destination.lon, label: 'the city centre' };
+}
+function drawBody() {
+  var body = $('#cp-body'), plan = comp.plan;
+  if (!body || !plan) return;
+  var day = plan.days[comp.day], stops = day.stops, now = comp.mins, kids = youngKids(plan), rule = kids ? WALK.kids : WALK.adults;
+  if ($('#cp-time')) $('#cp-time').textContent = hm(now);
+  var here = whereNow(stops), cur = null, next = null;
+  stops.forEach(function (s) { var t = mm(s.time); if (t == null) return; if (t <= now && now < t + (DUR[s.kind] || 45)) cur = s; if (t > now && !next) next = s; });
+  var walk = function (p) {  // distance and how to get there from here
+    var km = distKm(here, p) * 1.3, mode = km <= rule.km ? 'walk' : 'transit';
+    return { km: km, mode: mode, text: far(km * 1000) + ' · ' + (mode === 'walk' ? '🚶 ' + Math.max(2, Math.round(km / rule.pace)) + ' min' : '🚇 metro or taxi') };
+  };
+  var go = function (p, mode) { return navLinks({ lat: p.lat, lon: p.lon, name: p.name, _mode: mode }); };
+  // now and next
+  var h = '<div class="cp-grid"><section class="cp-box"><h4>Now · ' + hm(now) + '</h4>';
+  if (cur) h += '<p class="cp-big">' + (ICON[cur.kind] || '') + ' ' + esc(cur.name) + '</p><p class="cp-sub">until about ' + hm(mm(cur.time) + (DUR[cur.kind] || 45)) + '</p>';
+  else if (next && next === stops[0]) h += '<p class="cp-big">The day starts at ' + esc(next.time) + '</p>';
+  else if (next) h += '<p class="cp-big">Free time</p><p class="cp-sub">look around below, or head to the next stop</p>';
+  else h += '<p class="cp-big">That is the day done 🌙</p>' + (plan.days[comp.day + 1] && plan.days[comp.day + 1].stops[0] ?
+    '<p class="cp-sub">Tomorrow starts at ' + esc(plan.days[comp.day + 1].stops[0].time) + ' · ' + esc(plan.days[comp.day + 1].stops[0].name) + '</p>' : '');
+  if (next) {
+    var w = walk(next);
+    h += '<div class="cp-next"><span class="cp-k">Next · ' + esc(next.time) + ' · in ' + inMin(mm(next.time) - now) + '</span>' +
+      '<p class="cp-name">' + (ICON[next.kind] || '') + ' ' + esc(next.name) + '</p><p class="cp-sub">' + w.text + ' from ' + esc(here.label) + '</p>' + go(next, w.mode) + '</div>';
+  }
+  h += '</section>';
+  // the next prayer, and where to pray it
+  var pt = day.prayer_times || {}, pr = null;
+  PRAYERS.forEach(function (p) { var t = mm(pt[p]); if (!pr && t != null && t + 15 > now) pr = { name: p, t: t }; });
+  h += '<section class="cp-box pray"><h4>Next prayer</h4>';
+  if (pr) {
+    var planned = stops.filter(function (s) { return s.kind === 'prayer' && s.prayer === pr.name && s.lat != null; })[0];
+    var mosques = places('mosques', here).slice(0, 1), m = comp.here && mosques[0] ? mosques[0] : planned || mosques[0];
+    var friday = pr.name === 'Dhuhr' && planned && planned.jumuah;
+    h += '<p class="cp-big">' + (friday ? "Jumu'ah" : pr.name) + ' · ' + hm(pr.t) + '</p><p class="cp-sub cp-count">' +
+      (pr.t <= now ? 'started ' + inMin(now - pr.t) + ' ago — there is still time' : 'in ' + inMin(pr.t - now)) + '</p>';
+    if (m) {
+      var wm = walk(m);
+      h += '<p class="cp-name">🕌 ' + esc(m.name) + '</p><p class="cp-sub">' + wm.text + (m === planned ? ' · in your plan' : ' · nearest to you') + '</p>' + go(m, wm.mode);
+    }
+  } else {
+    var tmr = plan.days[comp.day + 1] && plan.days[comp.day + 1].prayer_times;
+    h += '<p class="cp-big">Isha was at ' + esc(pt.Isha || '') + '</p>' + (tmr && tmr.Fajr ? '<p class="cp-sub">Fajr tomorrow at ' + esc(tmr.Fajr) + '</p>' : '');
+  }
+  h += '</section></div>';
+  // around you
+  var tabs = { halal: '🍽️ Halal food', mosques: '🕌 Mosques', sights: '🏛️ More to see' };
+  var list = places(comp.tab, here).slice(0, 4);
+  h += '<section class="cp-near"><div class="cp-near-h"><h4>Around ' + (comp.here ? 'you' : esc(here.label)) + '</h4>' +
+    '<button type="button" class="cp-loc" data-loc="1">📍 ' + (comp.here ? 'Update my location' : 'Use my location') + '</button></div>' +
+    (comp.msg ? '<p class="cp-msg">' + esc(comp.msg) + '</p>' : '') +
+    '<div class="cp-tabs" role="tablist">' + Object.keys(tabs).map(function (k) {
+      return '<button type="button" role="tab" aria-selected="' + (k === comp.tab) + '" data-tab="' + k + '"' + (k === comp.tab ? ' class="on"' : '') + '>' + tabs[k] + '</button>';
+    }).join('') + '</div><ul class="cp-list">' + (list.length ? list.map(function (p) {
+      var w = walk(p), b = '';
+      if (p.halal_level) b += '<span class="badge ' + p.halal_level + '" title="' + esc(p.halal_reason) + '">' + LEVEL[p.halal_level] + '</span>';
+      if (p.alcohol && comp.tab === 'halal') b += '<span class="badge alc">Serves alcohol</span>';
+      if (p.because && p.because.length) b += '<span class="badge src">Because you love ' + esc(p.because.join(' & ')) + '</span>';
+      if (p.topic && p.topic.length) b += '<span class="badge topic">Known for ' + esc(p.topic.join(' & ')) + '</span>';
+      if (p.popular && comp.tab === 'sights') b += '<span class="badge must">Must-see</span>';
+      if (p.kids_ok && kids && comp.tab !== 'mosques') b += '<span class="badge kids">Good for kids</span>';
+      if (p.cuisine) b += '<span class="badge k">' + esc(p.cuisine) + '</span>';
+      else if (p.categories && p.categories.length && comp.tab === 'sights') b += '<span class="badge k">' + esc(p.categories[0]) + '</span>';
+      return '<li><button type="button" class="cp-show" data-lat="' + p.lat + '" data-lon="' + p.lon + '" data-name="' + esc(p.name) + '">' + esc(p.name) + '</button>' +
+        (p._inPlan ? ' <span class="cp-inplan">in your plan</span>' : '') + '<span class="cp-sub"> · ' + w.text + '</span>' +
+        (b ? '<div class="badges">' + b + '</div>' : '') + go(p, w.mode) + '</li>';
+    }).join('') : '<li class="cp-sub">Nothing found within walking distance — try another tab.</li>') + '</ul>' +
+    '<p class="cp-note">From the ' + poolSize() + ' places Qloo and OpenStreetMap found for this plan — no new searches, works on weak internet.' +
+    (plan.nearby ? '' : ' Plan this trip again for more places around you.') + '</p></section>';
+  body.innerHTML = h;
+  hereOnMap(here);
+}
+// the city as the traveller wrote it ("London", not "Greater London")
+function cityOf(plan) { return String(comp.city || (plan.example && plan.example.destination) || plan.destination.name || '').split(',')[0].trim(); }
+function poolSize() { var n = comp.plan.nearby || {}; return ['halal', 'mosques', 'sights'].reduce(function (a, k) { return a + (n[k] || []).length; }, 0) + comp.plan.days.reduce(function (a, d) { return a + d.stops.length; }, 0); }
+// candidates of one kind near a point: the plan's own stops and the ones Qloo found but the plan did not use
+function places(kind, here) {
+  var want = { halal: 'meal', mosques: 'prayer', sights: 'sight' }[kind], seen = {}, out = [];
+  comp.plan.days.forEach(function (d) { d.stops.forEach(function (s) { if (s.kind === want && s.lat != null) out.push(Object.assign({ _inPlan: true }, s)); }); });
+  out = out.concat(((comp.plan.nearby || {})[kind]) || []).filter(function (p) {
+    var k = String(p.name).toLowerCase(); if (seen[k]) return false; seen[k] = 1; return p.lat != null;
+  }).map(function (p) { return Object.assign({ _m: distKm(here, p) * 1000 }, p); });
+  out.sort(function (a, b) { return a._m - b._m; });
+  if (kind === 'mosques') return out;
+  // halal food: the most certain options within a short walk first; sights: personal matches first
+  var close = out.filter(function (p) { return p._m <= 1200; });
+  if (close.length < 3) return out;
+  var rank = kind === 'halal' ? function (p) { return (RANK[p.halal_level] || 0) * 2 + (p.alcohol ? 3 : 0); }
+    : function (p) { return -((p.topic && p.topic.length ? 2 : 0) + (p.because && p.because.length ? 1 : 0) + (p.popular ? 1 : 0)); };
+  return close.sort(function (a, b) { return rank(a) - rank(b) || a._m - b._m; }).concat(out.filter(function (p) { return p._m > 1200; }));
+}
+function hereOnMap(here) {
+  if (!map) return;
+  if (comp.pin) comp.pin.remove();
+  comp.pin = L.marker([here.lat, here.lon], { icon: L.divIcon({ className: '', html: '<div class="here-icon"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), zIndexOffset: 1000 })
+    .bindPopup(comp.here ? 'You are here' : 'Around ' + esc(here.label)).addTo(map);
+}
+var cpBox = $('#companion');
+if (cpBox) {
+  cpBox.addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.preview != null) { startPreview(+b.dataset.preview); showDayOnMap(comp.day); }
+    else if (b.dataset.close) { comp.mode = 'teaser'; comp.here = null; comp.msg = ''; if (comp.pin) { comp.pin.remove(); comp.pin = null; } drawCompanion(); }
+    else if (b.dataset.pday != null) { comp.day = +b.dataset.pday; comp.here = null; drawCompanion(); showDayOnMap(comp.day); }
+    else if (b.dataset.tab) { comp.tab = b.dataset.tab; drawBody(); }
+    else if (b.dataset.loc) locate(b);
+    else if (b.dataset.lat) {
+      var p = [+b.dataset.lat, +b.dataset.lon];
+      L.popup().setLatLng(p).setContent(esc(b.dataset.name)).openOn(map); map.setView(p, 16);
+      if (window.innerWidth <= 900) $('#map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+  cpBox.addEventListener('input', function (e) { if (e.target.id === 'cp-range') { comp.mins = +e.target.value; drawBody(); } });
+}
+function showDayOnMap(d) {
+  document.querySelectorAll('#daybar button').forEach(function (x) { x.classList.toggle('on', +x.dataset.d === d); });
+  showDay(d);
+}
+// the phone's location is asked only when the traveller taps the button, and never leaves the phone
+function locate(btn) {
+  if (!navigator.geolocation) { comp.msg = 'This browser cannot share your location.'; return drawBody(); }
+  btn.disabled = true; btn.textContent = '📍 Finding you…';
+  navigator.geolocation.getCurrentPosition(function (pos) {
+    var me = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: 'you' }, km = distKm(me, comp.plan.destination);
+    if (km > 40) { comp.here = null; comp.msg = 'You are ' + Math.round(km) + ' km from ' + cityOf(comp.plan) + ' — showing what is around your plan instead.'; }
+    else { comp.here = me; comp.msg = ''; }
+    drawBody();
+  }, function () { comp.msg = 'Location is off — showing what is around your plan instead.'; drawBody(); }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
 }
 
 function showDay(d) {

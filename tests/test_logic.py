@@ -382,3 +382,44 @@ def test_one_taste_does_not_badge_every_place(monkeypatch):
     trip.signals, trip.tags = {"hp": "Harry Potter"}, {}
     out = {p["name"]: p for p in asyncio.run(agent._taste_places(trip, ["museum"], {}))["museum"]}
     assert out["Taste 0"].get("taste_match") and not out["National Gallery"].get("taste_match")
+
+
+@pytest.mark.parametrize("name", ["Ege Rum Meyhanesi", "Bira Evi", "Taksim Birahanesi", "The Wine Bar"])
+def test_turkish_tavern_names_are_alcohol_venues(name):
+    assert qloo.is_alcohol_venue({"name": name})
+
+
+def test_osm_tavern_never_enters_the_halal_pool():
+    trip = agent.Trip({"lat": 41.0, "lon": 29.0, "country_code": "tr", "name": "Istanbul"})
+    trip.absorb_osm({"halal": [{"osm_id": "n1", "name": "Ege Rum Meyhanesi", "lat": 41.0, "lon": 29.0},
+                               {"osm_id": "n2", "name": "Sultan Köşesi", "lat": 41.001, "lon": 29.0}], "mosques": []})
+    assert [p["name"] for p in trip.pool["halal"].values()] == ["Sultan Köşesi"]
+
+
+def test_meals_are_spaced_and_at_most_three():
+    meal = lambda t: {"time": t, "kind": "meal", "name": t}
+    final = {"days": [{"stops": [meal("12:30"), {"time": "13:00", "kind": "prayer"}, meal("14:00"), meal("15:30"),
+                                 meal("16:00"), meal("19:00"), meal("21:30")]}]}
+    agent._space_meals(final)
+    assert [s["time"] for s in final["days"][0]["stops"] if s["kind"] == "meal"] == ["12:30", "15:30", "19:00"]
+    assert any(s["kind"] == "prayer" for s in final["days"][0]["stops"])
+
+
+def test_nearby_places_for_today_mode():
+    trip = agent.Trip({"lat": 51.5, "lon": -0.12, "country_code": "gb", "name": "London"})
+    trip.keep("q:1", {"name": "Used Grill", "lat": 51.5, "lon": -0.12, "halal_level": "verified"}, "qloo", "halal")
+    trip.keep("q:2", {"name": "Maybe Kebab", "lat": 51.51, "lon": -0.12, "halal_level": "likely"}, "qloo", "halal")
+    trip.keep("q:3", {"name": "Sure Diner", "lat": 51.52, "lon": -0.12, "halal_level": "verified", "description": "long"}, "qloo", "halal")
+    trip.keep("q:4", {"name": "Big Mosque", "lat": 51.5, "lon": -0.13, "kind": "mosque"}, "qloo", "mosques")
+    final = {"days": [{"stops": [{"ref": "q:1", "kind": "meal"}]}]}
+    near = agent._nearby(final, trip)
+    assert [p["name"] for p in near["halal"]] == ["Sure Diner", "Maybe Kebab"]  # not the plan's own; listed halal first
+    assert "description" not in near["halal"][0] and near["mosques"][0]["name"] == "Big Mosque"
+    assert near["sights"] == []
+
+
+def test_open_all_day_reads_24_hours():
+    square = {"hours": {"sunday": [{"opens": "T00:00:00", "closes": "T00:00:00", "closed": False}]}}
+    final = {"days": [{"date": "2026-10-18", "stops": [{"time": "16:35", "kind": "sight", "ref": "q:1"}]}]}
+    agent._check_hours(final, _Trip({"q:1": square}))
+    assert final["days"][0]["stops"][0]["open_today"] == "24 hours"

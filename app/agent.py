@@ -277,6 +277,8 @@ class Trip:
         for kind in ("mosques", "halal"):
             for p in area.get(kind, []):
                 ref = "osm:" + p["osm_id"]
+                if kind == "halal" and qloo.is_alcohol_venue(p):  # a meyhane or a bar mapped as a restaurant
+                    continue
                 if ref in self.places or any(x.get("osm_id") == p["osm_id"] for x in self.pool[kind].values()):
                     continue
                 if kind == "halal":
@@ -1049,7 +1051,8 @@ def _check_hours(final: dict, trip: Trip, drop: bool = True) -> None:
                     day["stops"].remove(st)
                 continue
             if hours:
-                st["open_today"] = f"{_hhmm(hours[0])}–{_hhmm(hours[1] % (24 * 60))}"
+                st["open_today"] = "24 hours" if hours[0] == 0 and hours[1] >= 24 * 60 - 1 else \
+                    f"{_hhmm(hours[0])}–{_hhmm(hours[1] % (24 * 60))}"
                 if t < hours[0]:
                     st["time"] = _hhmm((hours[0] + 14) // 15 * 15)
         day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
@@ -1243,6 +1246,24 @@ async def _meals_nearby(final: dict, trip: Trip) -> None:
                 used.add(_key(food["name"]))
 
 
+MEAL_GAP = 150  # minutes between two meals: lunch, an afternoon coffee or sweet, dinner
+
+
+def _space_meals(final: dict) -> None:
+    """The model sometimes stacks meals (lunch at 12:30, another at 14:00, a third at 15:30): keep at most three
+    a day, each at least 2.5 hours after the previous one; the free time is filled with sights afterwards."""
+    for day in final.get("days", []):
+        last, n = None, 0
+        for st in list(day["stops"]):
+            t = _mins(st.get("time", "")) if st.get("kind") == "meal" else None
+            if t is None:
+                continue
+            if n >= 3 or (last is not None and t - last < MEAL_GAP):
+                day["stops"].remove(st)
+                continue
+            last, n = t, n + 1
+
+
 def _polish(final: dict, trip: Trip) -> None:
     """Fix what the model tends to get wrong: places that match what the traveller said they love must be in
     the plan (e.g. the Natural History Museum for kids who love dinosaurs), and a 'why' that describes a
@@ -1274,6 +1295,7 @@ def _polish(final: dict, trip: Trip) -> None:
             done |= words(x)
             added += 1
     _check_hours(final, trip)
+    _space_meals(final)
     _fill_days(final, trip)
     _check_hours(final, trip, drop=False)
     # pray at the mosque nearest to where the family is at that time (the model tends to reuse one mosque all day)
@@ -1301,6 +1323,36 @@ def _polish(final: dict, trip: Trip) -> None:
             mixed = own and own not in why and any(n != own and n not in own and why.startswith(n) for n in names)
             if st.get("kind") != "prayer" and (mixed or re.search(r"\bfans?\b", why)):
                 st["why"] = _why(trip.places.get(st.get("ref"), st))
+
+
+NEARBY_FIELDS = ("name", "lat", "lon", "halal_level", "halal_reason", "alcohol", "cuisine", "because", "kids_ok", "popular",
+                 "topic", "source", "categories", "rating")
+NEARBY_MAX = {"halal": 60, "mosques": 40, "sights": 40}
+
+
+def _nearby(final: dict, trip: Trip) -> dict:
+    """Places the tools found that the plan does not use, for the phone on the day of the trip ("Today" mode):
+    halal food, mosques and sights near wherever the traveller is — no new Qloo requests, works offline."""
+    used = {s.get("ref") for d in final.get("days", []) for s in d.get("stops", [])}
+    order = {
+        "halal": lambda p: (RANK.get(p.get("halal_level"), 3), bool(p.get("alcohol")), -(p.get("affinity") or 0)),
+        "mosques": lambda p: (p.get("source") != "qloo",),
+        "sights": lambda p: (-bool(p.get("topic")) - bool(p.get("because")) - bool(p.get("popular")), -(p.get("affinity") or 0)),
+    }
+    out = {}
+    for kind, pool in trip.pool.items():
+        items = [p for ref, p in pool.items() if ref not in used and p.get("lat") is not None and p.get("name")
+                 and (kind != "sights" or not p.get("halal_level"))]
+        items.sort(key=order[kind])
+        rows = []
+        for p in items[:NEARBY_MAX[kind]]:
+            row = {k: p[k] for k in NEARBY_FIELDS if p.get(k) not in (None, "", [], False)}
+            row["lat"], row["lon"] = round(p["lat"], 5), round(p["lon"], 5)
+            if row.get("categories"):
+                row["categories"] = row["categories"][:1]
+            rows.append(row)
+        out[kind] = rows
+    return out
 
 
 async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
@@ -1376,6 +1428,7 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     _check_hours(final, trip, drop=False)
     await _meals_nearby(final, trip)
     _untangle(final, trip.kids)
+    final["nearby"] = _nearby(final, trip)
     final["destination"] = trip.dest
     final["timezone"] = next((p["timezone"] for p in prayers if p.get("timezone")), "")  # the plan's times are local there
     if any(p.get("missing") for p in prayers):

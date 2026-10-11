@@ -15,7 +15,13 @@ what you love — films, books, authors, music, games, teams — and its agent b
   *Serves alcohol* flag; bars, pubs and meyhanes are never suggested
 - 🕌 **every day built around the prayers**: Dhuhr, Asr and Maghrib at the mosque nearest to where you are at that
   moment, with the day's real prayer times and Hijri date — and Jumu'ah at a well-known mosque on Fridays
-- 👨‍👩‍👧 **family-aware**: *Good for kids* places, famous highlights mixed with personal finds
+- 👨‍👩‍👧 **family-aware**: *Good for kids* places, famous highlights mixed with personal finds, walking times at
+  children's pace
+- 📱 **a companion on the day**: open the plan on your phone during the trip and Rihla shows what is *now* and
+  *next*, a countdown to the next prayer with the mosque nearest to you, and halal food, mosques and more places
+  *around you* — taken from the places Qloo already found for your plan, so it costs no new requests and works on
+  weak internet. Before the trip, **Preview** any day with a time slider.
+- 🧭 **one tap to Google Maps or Apple Maps** for every stop and every walk; trips stay saved on your phone
 
 Built for the [Qloo Agentic Hackathon](https://qloo.devpost.com/).
 
@@ -77,6 +83,20 @@ uvicorn app.main:app --port 8090
 Open http://localhost:8090. Qloo responses are cached for a week (the hackathon key allows 10,000 requests a month).
 
 Tests (offline, no keys needed): `pip install pytest && pytest -q`
+
+## On the day: the Today companion
+
+A plan is only useful if it helps on the street. When the date of a saved trip comes, Rihla opens on *Today*:
+
+- **Now and next** — the stop you are at, the next one with a countdown and directions
+- **Next prayer** — "Dhuhr · 12:58 · in 40 min" and the mosque in your plan, or the one nearest to you once you
+  share your location (asked only when you tap the button; it never leaves the phone)
+- **Around you** — halal food (most certain first, *Serves alcohol* flagged), mosques and *More to see* (taste
+  matches first, "Because you love …"), each with walking time and directions
+
+All of it comes from the Qloo (and OpenStreetMap) results the agent gathered for the plan, sent with the plan as
+`nearby` — so the companion makes **zero new Qloo requests** and keeps working on weak roaming internet. Judges and
+travellers planning ahead can press **Preview Day 1 now** and drag the time slider through the day.
 
 ## Reliability
 - If the language model is unavailable, Rihla runs the same tools itself and assembles the plan from the same Qloo
