@@ -5,7 +5,7 @@
 🌍 **Live demo:** https://rihla-agent.vercel.app · 🎬 **Video (1 min):** https://youtu.be/KpyL4OQyVLw · 📦 **Code:** https://github.com/me7ko-dev/rihla ·
 [![tests](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml/badge.svg)](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml)
 
-![A two-day family plan for London: Natural History Museum "known for dinosaurs", halal meals, prayers at the nearest mosque](docs/rihla-plan.png)
+![A two-day family plan for London on a Friday: the Natural History Museum "known for dinosaurs" until 10:54, Jumu'ah at Holborn Mosque, lunch just after, Leadenhall Market "known for Harry Potter"](docs/rihla-plan.png)
 
 Rihla plans city trips for Muslim travellers and families. Tell it where you are going, who is travelling and
 what you love — films, books, authors, music, games, teams — and its agent builds a day-by-day plan:
@@ -99,6 +99,8 @@ Tests (offline, no keys needed — 150 of them, from halal labels to Jumu'ah): `
 ## On the day: the Today companion
 
 A plan is only useful if it helps on the street. When the date of a saved trip comes, Rihla opens on *Today*:
+
+![The Today companion: now at the Natural History Museum, Jumu'ah in 1 h 14 min at Holborn Mosque, halal food around](docs/rihla-today.png)
 
 - **Now and next** — the stop you are at, the next one with a countdown and directions
 - **Next prayer** — "Dhuhr · 12:58 · in 40 min" and the mosque in your plan, or the one nearest to you once you

@@ -405,6 +405,18 @@ def _not_a_sight(it: dict, trip: Trip | None = None, wanted: set[str] | None = N
     return False
 
 
+NOT_FOOD = re.compile(r"\b(grocery|supermarket|hypermarket|convenience store|department store|shopping mall|butcher|"
+                      r"golf|driving range|gas station|pharmacy)\b", re.I)
+
+
+def _not_food(it: dict) -> bool:
+    """A supermarket with a halal section, a butcher or a golf range is not a place for a meal."""
+    cats = it.get("categories") or []
+    return bool(cats) and any(NOT_FOOD.search(c) for c in cats) and not any(re.search(r"restaurant|cafe|food", c) for c in cats) \
+        or bool(re.search(r"\b(sainsbury'?s|tesco|carrefour|lidl|aldi|walmart|costco|spar|7-eleven|migros|bim|a101|şok)\b",
+                          it.get("name") or "", re.I))
+
+
 def _qplace(it: dict, kind: str, trip: Trip, lat: float, lon: float, because: list[str] | None = None) -> dict:
     """A Qloo place as Rihla's place dict; 'because' = the traveller's tastes it matches."""
     because = because or []
@@ -724,7 +736,7 @@ async def _run_place_tool(trip: Trip, name: str, args: dict) -> tuple[list | dic
         area = area if isinstance(area, dict) else EMPTY_AREA
         found = []
         for it in items:
-            if it.get("lat") is None or it.get("closed_for_good") or it.get("lodging"):
+            if it.get("lat") is None or it.get("closed_for_good") or it.get("lodging") or _not_food(it):
                 continue
             p = _qplace(it, "restaurant", trip, lat, lon)
             match = halal.match_verified(p, area["halal"])
@@ -1777,7 +1789,8 @@ def _nearby(final: dict, trip: Trip) -> dict:
         items = [p for ref, p in pool.items() if ref not in used and p.get("lat") is not None and p.get("name")
                  and not p.get("closed_for_good") and not qloo.is_alcohol_venue(p) and len(_key(p["name"])) >= 2
                  and (kind == "mosques" or _key(p["name"]) not in used_names)
-                 and (kind != "sights" or (_a_sight(p, trip) and not p.get("alcohol")))]
+                 and (kind != "sights" or (_a_sight(p, trip) and not p.get("alcohol")))
+                 and (kind != "halal" or not _not_food(p))]
         items.sort(key=order[kind])
         rows, seen = [], set()
         for p in items:

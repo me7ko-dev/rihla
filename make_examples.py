@@ -46,6 +46,16 @@ def first_day(weekday: int | None) -> dt.date:
     return day
 
 
+async def warm_photos(plan: dict) -> None:
+    """Qloo's image server makes a photo the first time it is asked for (slow, or a 30 px placeholder): ask once
+    now, so the photos are ready when someone opens the example."""
+    import httpx
+    urls = {st["image"] for d in plan["days"] for st in d["stops"] if st.get("image")}
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+        for _ in range(2):
+            await asyncio.gather(*[c.get(u) for u in urls], return_exceptions=True)
+
+
 async def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     fresh = "--fresh" in sys.argv
@@ -76,6 +86,7 @@ async def main() -> None:
         best["example"] = {k: v for k, v in dict(ex, id=key).items() if k != "weekday"}
         best.pop("llm_log", None)
         (OUT / f"{key}.json").write_text(json.dumps(best, ensure_ascii=False), encoding="utf-8")
+        await warm_photos(best)
         print(f"{key}: kept {best['title']} — {sum(len(d['stops']) for d in best['days'])} stops", flush=True)
 
 

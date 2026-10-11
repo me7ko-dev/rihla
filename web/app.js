@@ -278,7 +278,7 @@ function render(plan, city) {
         return day.prayer_times[p] ? '<span>' + p + '<b>' + esc(day.prayer_times[p]) + '</b></span>' : '';
       }).join('') + '</div>';
     }
-    var list = '', prev = null, walk = 0, rides = 0;
+    var list = '', prev = null, walk = 0, rides = 0, pictured = {};
     day.stops.forEach(function (s, si) {
       var id = di + '-' + si;
       // how to get here from the previous stop (straight line x 1.3 for streets); the first stop of a day has no mode
@@ -307,7 +307,9 @@ function render(plan, city) {
       else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(category(s.categories)) + '</span>';
       if (s.jumuah) badges = '<span class="badge jumuah">Jumu\'ah · Friday prayer</span>' + badges;
       // the photo shows only once it has loaded: no empty box that disappears and moves the text
-      var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" referrerpolicy="no-referrer" style="display:none" onload="this.style.display=\'\'" onerror="this.remove()">' : '';
+      // a photo once per place and day (the same mosque for three prayers needs it once); shown when it has loaded
+      var img = s.image && !pictured[s.image] ? '<img class="thumb" src="' + esc(s.image) + '" alt="" referrerpolicy="no-referrer" hidden>' : '';
+      if (s.image) pictured[s.image] = 1;
       list += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '" tabindex="0"><div class="t">' + esc(s.time) +
         (s.until ? '<small title="Ends in time for the next prayer or the closing time">until ' + esc(s.until) + '</small>' : '') + '</div><div class="dot">' + (si + 1) + '</div>' +
         '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + (s.unnamed ? ' <small class="unnamed">· no name on the map</small>' : '') + '</h4><p dir="auto">' + esc(s.why) + '</p>' +
@@ -328,6 +330,11 @@ function render(plan, city) {
     return '<li><code>' + esc(t.tool) + '</code> <span class="api">' + esc(API[t.tool]) + '</span> ' + esc(what) + (t.note ? ' → ' + esc(t.note) : ' → ' + t.found + ' found') + '</li>';
   }).join('');
   $('#open-trace').onclick = function () { var t = $('#trace'); t.open = true; t.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  // photos appear only once loaded: no empty box that disappears and moves the text
+  document.querySelectorAll('#days img.thumb').forEach(function (im) {
+    var show = function () { if (im.naturalWidth >= 80) im.hidden = false; else im.remove(); };  // not a 30 px placeholder
+    if (im.complete) show(); else { im.addEventListener('load', show); im.addEventListener('error', function () { im.remove(); }); }
+  });
   drawMap(plan);
   companion(plan, city);
   document.querySelectorAll('.stop').forEach(function (el) {

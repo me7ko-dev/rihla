@@ -366,3 +366,10 @@ def test_one_dinner_however_late_the_second():
                                  {"time": "21:20", "kind": "meal", "name": "Second dinner"}]}]}
     agent._untangle(final)
     assert [s["name"] for s in final["days"][0]["stops"]] == ["Dinner"]
+
+
+@pytest.mark.parametrize("place, out", [({"name": "Sainsbury's", "categories": ["grocery store"]}, True),
+                                        ({"name": "Topgolf Dubai", "categories": ["golf driving range"]}, True),
+                                        ({"name": "Hiba Express", "categories": ["lebanese restaurant"]}, False)])
+def test_a_supermarket_is_not_a_meal(place, out):
+    assert agent._not_food(place) == out
