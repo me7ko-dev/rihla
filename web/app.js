@@ -167,9 +167,11 @@ form.addEventListener('submit', function (e) {
     li.classList.remove('now'); li.classList.add('ok');
     if (n != null) li.dataset.n = n;
   }
-  function finish() { clearInterval(timer); $('#loading').hidden = true; form.querySelector('.go').disabled = false; }
+  var ctl = window.AbortController ? new AbortController() : null;
+  $('#cancel').onclick = function () { if (ctl) ctl.abort(); };
+  function finish() { clearInterval(timer); $('#loading').hidden = true; form.querySelector('.go').disabled = false; $('#cancel').onclick = null; }
   // the plan arrives as a stream of server-sent events: steps first, then the plan
-  fetch('/api/plan/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  fetch('/api/plan/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl && ctl.signal })
     .then(function (r) {
       if (!r.ok || !r.body) return r.text().then(function (t) { throw new Error(errorText(r.status, t)); });
       var reader = r.body.getReader(), dec = new TextDecoder(), buf = '';
@@ -181,11 +183,16 @@ form.addEventListener('submit', function (e) {
           for (var i = 0; i < parts.length; i++) {
             var line = parts[i].split('\n').filter(function (l) { return l.indexOf('data: ') === 0; })[0];
             if (!line) continue;
-            var ev = JSON.parse(line.slice(6));
+            var ev;
+            try { ev = JSON.parse(line.slice(6)); } catch (e) { continue; }  // a broken line must not stop the plan
             if (ev.type === 'step') step(ev.text, ev.id);
             else if (ev.type === 'found') found(ev.id, ev.n);
             else if (ev.type === 'error') throw new Error(ev.detail);
-            else if (ev.type === 'done') { reader.cancel(); return ev.plan; }
+            else if (ev.type === 'done') {
+              reader.cancel();
+              if (!ev.plan || !Array.isArray(ev.plan.days) || !ev.plan.days.length) throw new Error('Rihla could not build a plan for this place. Please try a nearby city, or open an example plan below.');
+              return ev.plan;
+            }
           }
           return pump();
         });
@@ -197,7 +204,12 @@ form.addEventListener('submit', function (e) {
       try { saveTrip(plan, body); } catch (e) { }  // saving is a bonus: the plan is shown whatever happens
       render(plan, body.destination);
     })
-    .catch(function (err) { finish(); $('#err').textContent = err.message; $('#err').hidden = false; });
+    .catch(function (err) {
+      finish();
+      if (err && err.name === 'AbortError') return;  // they pressed Cancel
+      $('#err').textContent = err instanceof TypeError ? 'No connection to Rihla — check your internet and try again, or open an example plan below.' : err.message;
+      $('#err').hidden = false;
+    });
 });
 
 // a message a person can act on, whatever the server or its proxy sent back
@@ -208,11 +220,27 @@ function errorText(status, text) {
   if (typeof d === 'string' && d) return d;
   if (Array.isArray(d) && d.length) {  // the form did not pass the server's checks
     var f = (d[0].loc || []).slice(-1)[0], name = { destination: 'Where are you going', tastes: 'What do you love', travellers: 'Who is travelling' }[f];
-    return (name ? '“' + name + '”: ' : '') + (d[0].msg || 'please check the form') + '.';
+    var what = /too_short/.test(d[0].type || '') ? 'please write a little more' : /too_long/.test(d[0].type || '') ? 'please make it shorter' : 'please check it';
+    return (name ? '“' + name + '”: ' : '') + what + '.';
   }
+  if (status === 429) return 'You have planned several trips in the last hour — please try again a little later, or open an example plan below.';
   return status >= 500 ? 'Rihla’s server is busy right now. Please try again in a minute — or open an example plan below.'
     : 'Something went wrong (' + status + '). Please try again.';
 }
+
+// what the trace shows: the agent's real steps (a tool the model made up is not a step), with the API behind each
+var API = { taste_entities: 'Qloo /search', topic_tags: 'Qloo /v2/tags', taste_places: 'Qloo /v2/insights',
+  halal_food_near: 'Qloo /v2/insights + OpenStreetMap', mosques_near: 'Qloo /v2/insights + OpenStreetMap',
+  sights_near: 'OpenStreetMap', compose_plan: 'AI writer', edit_texts: 'AI editor' };
+function steps(plan) { return (plan.trace || []).filter(function (t) { return API[t.tool]; }); }
+function qloo(plan) { var q = plan.qloo_calls || {}; return (q.requests || 0) + (q.cached || 0); }
+function modelName(m) {
+  m = String(m || '');
+  return /nemotron/i.test(m) ? 'NVIDIA Nemotron 3 Super' : /gpt-oss/i.test(m) ? 'GPT-OSS 120B on Groq' : m.split('/').pop();
+}
+function cuisine(c) { return String(c).replace(/_/g, ' ').split(/\s*[,;]\s*/).filter(Boolean).slice(0, 2).join(', '); }
+// the most telling category: "art museum" rather than the generic "tourist attraction"
+function category(cats) { return cats.filter(function (c) { return !/^(tourist attraction|point of interest|establishment)$/.test(c); })[0] || cats[0]; }
 
 function render(plan, city) {
   $('#result').hidden = false;
@@ -225,11 +253,12 @@ function render(plan, city) {
   $('#sum').innerHTML = (plan.fallback ? '<p class="exnote">The AI writer was busy, so Rihla assembled this plan itself from the same Qloo results.</p>' : '') +
     (plan.example ? '<p class="exnote">Example plan, made with the same agent and live Qloo data. Change anything above and press “Plan my trip” for your own.</p>' : '') +
     '<h2 dir="auto">' + esc(plan.title) + '</h2><p dir="auto">' + esc(plan.summary) + '</p><div class="meta">' +
-    '<span>📍 ' + esc((plan.destination.name || '').split(',').slice(0, 3).join(',')) + '</span>' +
+    '<span title="' + esc(plan.destination.name) + '">📍 ' + esc(city || (plan.example && plan.example.destination) || (plan.destination.name || '').split(',').slice(0, 2).join(',')) + '</span>' +
     '<span>' + plan.days.length + (plan.days.length === 1 ? ' day' : ' days') + ' · ' + stops + ' stops</span>' +
     '<span>🍽️ ' + meals + ' halal-aware meals' + (verified ? ' (' + verified + ' listed halal)' : '') + '</span>' +
     (local ? '<span title="' + esc(plan.timezone) + '">🕒 Local times · ' + esc(local) + '</span>' : '') +
-    (plan.seconds ? '<span>⏱️ planned in ' + plan.seconds + ' s</span>' : '') + '</div>' +
+    (plan.seconds ? '<span>⏱️ planned in ' + plan.seconds + ' s</span>' : '') +
+    '<button type="button" class="meta-trace" id="open-trace">🤖 ' + steps(plan).length + ' agent steps' + (qloo(plan) ? ' · ' + qloo(plan) + ' Qloo calls' : '') + '</button></div>' +
     ((plan.signals && plan.signals.length) || (plan.topics && plan.topics.length) || (plan.audiences && plan.audiences.length) ?
       '<div class="taste"><b>Your Qloo taste profile</b>' +
       (plan.signals || []).map(function (x) { return '<span class="sig">' + esc(x) + '</span>'; }).join('') +
@@ -267,15 +296,17 @@ function render(plan, city) {
       if (s.requested) badges += '<span class="badge must">You asked for this</span>';
       if (s.topic && s.topic.length) badges += '<span class="badge topic">Known for ' + esc(s.topic.join(' & ')) + '</span>';
       if (s.popular && s.kind === 'sight') badges += '<span class="badge must">Must-see</span>';
-      if (s.kids_ok && s.kind !== 'prayer') badges += '<span class="badge kids">Good for kids</span>';
+      if (s.kids_ok && kids && s.kind !== 'prayer') badges += '<span class="badge kids">Good for kids</span>';
       if (s.open_today) badges += '<span class="badge k" title="Opening hours that day (Qloo)">Open ' + esc(s.open_today) + '</span>';
       if (s.alcohol && s.kind === 'meal') badges += '<span class="badge alc" title="Qloo lists alcohol at this place">Serves alcohol</span>';
-      if (s.cuisine) badges += '<span class="badge k">' + esc(String(s.cuisine).replace(/_/g, ' ')) + '</span>';
-      else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(s.categories[0]) + '</span>';
+      if (s.cuisine) badges += '<span class="badge k">' + esc(cuisine(s.cuisine)) + '</span>';
+      else if (s.categories && s.categories.length && s.kind !== 'prayer') badges += '<span class="badge k">' + esc(category(s.categories)) + '</span>';
       if (s.jumuah) badges = '<span class="badge jumuah">Jumu\'ah · Friday prayer</span>' + badges;
-      var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '';
-      list += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '"><div class="t">' + esc(s.time) + '</div><div class="dot">' + (si + 1) + '</div>' +
-        '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + '</h4><p dir="auto">' + esc(s.why) + '</p>' +
+      // the photo shows only once it has loaded: no empty box that disappears and moves the text
+      var img = s.image ? '<img class="thumb" src="' + esc(s.image) + '" alt="" referrerpolicy="no-referrer" style="display:none" onload="this.style.display=\'\'" onerror="this.remove()">' : '';
+      list += '<li class="stop ' + esc(s.kind) + '" data-id="' + id + '" tabindex="0"><div class="t">' + esc(s.time) +
+        (s.until ? '<small title="Ends in time for the next prayer or the closing time">until ' + esc(s.until) + '</small>' : '') + '</div><div class="dot">' + (si + 1) + '</div>' +
+        '<div class="body"><div class="txt"><h4>' + (ICON[s.kind] || '') + ' ' + esc(s.name) + (s.unnamed ? ' <small class="unnamed">· no name on the map</small>' : '') + '</h4><p dir="auto">' + esc(s.why) + '</p>' +
         (badges ? '<div class="badges">' + badges + '</div>' : '') + '</div>' + img + '</div>' + navLinks(s) + '</li>';
     });
     h += '<div class="move">≈ ' + walk.toFixed(1) + ' km on foot' + (kids ? ' at children’s pace' : '') + (rides ?' · ' + rides + (rides === 1 ? ' ride' : ' rides') + ' by metro or taxi' : '') + '</div>';
@@ -283,23 +314,29 @@ function render(plan, city) {
   });
   if (plan.tips && plan.tips.length) h += '<section class="card tips"><h3>Good to know</h3><ul>' + plan.tips.map(function (t) { return '<li dir="auto">' + esc(t) + '</li>'; }).join('') + '</ul></section>';
   $('#days').innerHTML = h;
-  var q = plan.qloo_calls || {}, qn = (q.requests || 0) + (q.cached || 0);
-  $('#trace summary').textContent = '🤖 How Rihla planned this — ' + (plan.trace || []).length + ' agent steps' +
-    (qn ? ' · ' + qn + ' Qloo calls' : '') + ' · model ' + String(plan.model || '').split('/').pop();
-  $('#trace ol').innerHTML = (plan.trace || []).map(function (t) {
-    var a = t.args || {}; var what = a.query || a.category || (typeof a.lat === 'number' ? a.lat.toFixed(3) + ', ' + a.lon.toFixed(3) : '');
-    return '<li><code>' + esc(t.tool) + '</code> ' + esc(what) + (t.note ? ' → ' + esc(t.note) : ' → ' + t.found + ' found') + '</li>';
+  $('#trace summary').textContent = '🤖 How Rihla planned this — ' + steps(plan).length + ' agent steps' +
+    (qloo(plan) ? ' · ' + qloo(plan) + ' Qloo calls' : '') + ' · ' + modelName(plan.model);
+  $('#trace ol').innerHTML = steps(plan).map(function (t) {
+    var a = t.args || {};
+    var what = a.query || a.category || (a.categories || []).join(', ') || (typeof a.lat === 'number' ? a.lat.toFixed(3) + ', ' + a.lon.toFixed(3) : '');
+    if (a.items) what = a.items.map(function (x) { return '“' + x.query + '”'; }).join(', ');
+    if (a.topics) what = a.topics.join(', ');
+    return '<li><code>' + esc(t.tool) + '</code> <span class="api">' + esc(API[t.tool]) + '</span> ' + esc(what) + (t.note ? ' → ' + esc(t.note) : ' → ' + t.found + ' found') + '</li>';
   }).join('');
+  $('#open-trace').onclick = function () { var t = $('#trace'); t.open = true; t.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
   drawMap(plan);
   companion(plan, city);
   document.querySelectorAll('.stop').forEach(function (el) {
-    el.addEventListener('click', function (e) {
-      if (e.target.closest('a')) return; // a directions link opens the map app, not our map
+    var open = function () {
       var m = markers[el.dataset.id]; if (!m) return;
       var d = +el.dataset.id.split('-')[0];
       document.querySelectorAll('#daybar button').forEach(function (x) { x.classList.toggle('on', +x.dataset.d === d); });
       showDay(d); map.setView(m.getLatLng(), 16); m.openPopup();
-    });
+      // on a phone the map is above the list: bring it into view, or the tap seems to do nothing
+      if (window.innerWidth <= 900) $('#map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    el.addEventListener('click', function (e) { if (!e.target.closest('a')) open(); });  // a directions link opens the map app
+    el.addEventListener('keydown', function (e) { if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); open(); } });
   });
   $('#result').scrollIntoView({ behavior: 'smooth' });
 }
@@ -377,19 +414,30 @@ function drawBody() {
   if (!body || !plan) return;
   var day = plan.days[comp.day], stops = day.stops, now = comp.mins, kids = youngKids(plan), rule = kids ? WALK.kids : WALK.adults;
   if ($('#cp-time')) $('#cp-time').textContent = hm(now);
-  var here = whereNow(stops), cur = null, next = null;
-  stops.forEach(function (s) { var t = mm(s.time); if (t == null) return; if (t <= now && now < t + (DUR[s.kind] || 45)) cur = s; if (t > now && !next) next = s; });
+  var here = whereNow(stops), cur = null, next = null, first = null;
+  // a stop lasts until its "until" (it ends in time for the next prayer) or its usual length; the prayer box below
+  // covers the prayers, so "Next" is the next visit or meal
+  stops.forEach(function (s) {
+    var t = mm(s.time); if (t == null) return;
+    if (t <= now && now < endOf(s)) cur = s;
+    if (t > now && !first) first = s;
+    if (t > now && !next && s.kind !== 'prayer') next = s;
+  });
   var walk = function (p) {  // distance and how to get there from here
     var km = distKm(here, p) * 1.3, mode = km <= rule.km ? 'walk' : 'transit';
-    return { km: km, mode: mode, text: far(km * 1000) + ' · ' + (mode === 'walk' ? '🚶 ' + Math.max(2, Math.round(km / rule.pace)) + ' min' : '🚇 metro or taxi') };
+    return { km: km, mode: mode, mins: mode === 'walk' ? Math.max(2, Math.round(km / rule.pace)) : Math.round(15 + 3 * km),
+      text: far(km * 1000) + ' · ' + (mode === 'walk' ? '🚶 ' + Math.max(2, Math.round(km / rule.pace)) + ' min' : '🚇 metro or taxi') };
   };
+  var travelMin = function (w) { return w.mins; };
   var go = function (p, mode) { return navLinks({ lat: p.lat, lon: p.lon, name: p.name, _mode: mode }); };
   // now and next
   var h = '<div class="cp-grid"><section class="cp-box"><h4>Now · ' + hm(now) + '</h4>';
-  if (cur) h += '<p class="cp-big">' + (ICON[cur.kind] || '') + ' ' + esc(cur.name) + '</p><p class="cp-sub">until about ' + hm(mm(cur.time) + (DUR[cur.kind] || 45)) + '</p>';
-  else if (next && next === stops[0]) h += '<p class="cp-big">The day starts at ' + esc(next.time) + '</p>';
-  else if (next) h += '<p class="cp-big">Free time</p><p class="cp-sub">look around below, or head to the next stop</p>';
-  else h += '<p class="cp-big">That is the day done 🌙</p>' + (plan.days[comp.day + 1] && plan.days[comp.day + 1].stops[0] ?
+  var going = first && !cur ? walk(first) : null, leave = going ? mm(first.time) - travelMin(going) : null;
+  if (cur) h += '<p class="cp-big">' + (ICON[cur.kind] || '') + ' ' + esc(cur.name) + '</p><p class="cp-sub">until about ' + hm(endOf(cur)) + '</p>';
+  else if (first && first === stops[0] && now < leave) h += '<p class="cp-big">The day starts at ' + esc(first.time) + '</p>';
+  else if (first && now >= leave) h += '<p class="cp-big">Time to go</p><p class="cp-sub">' + going.text + ' to ' + (ICON[first.kind] || '') + ' ' + esc(first.name) + ' (' + esc(first.time) + ')</p>';
+  else if (first) h += '<p class="cp-big">Free time until ' + hm(leave) + '</p><p class="cp-sub">look around below, or head to the next stop early</p>';
+  else h += '<p class="cp-big">Today’s plan is done 🌙</p>' + (plan.days[comp.day + 1] && plan.days[comp.day + 1].stops[0] ?
     '<p class="cp-sub">Tomorrow starts at ' + esc(plan.days[comp.day + 1].stops[0].time) + ' · ' + esc(plan.days[comp.day + 1].stops[0].name) + '</p>' : '');
   if (next) {
     var w = walk(next);
@@ -409,7 +457,7 @@ function drawBody() {
       (pr.t <= now ? 'started ' + inMin(now - pr.t) + ' ago — there is still time' : 'in ' + inMin(pr.t - now)) + '</p>';
     if (m) {
       var wm = walk(m);
-      h += '<p class="cp-name">🕌 ' + esc(m.name) + '</p><p class="cp-sub">' + wm.text + (m === planned ? ' · in your plan' : ' · nearest to you') + '</p>' + go(m, wm.mode);
+      h += '<p class="cp-name">🕌 ' + esc(m.name) + '</p><p class="cp-sub">' + wm.text + (m === planned ? ' · in your plan' : comp.here ? ' · nearest to you' : ' · nearest to ' + esc(here.label)) + '</p>' + go(m, wm.mode);
     }
   } else {
     var tmr = plan.days[comp.day + 1] && plan.days[comp.day + 1].prayer_times;
@@ -418,7 +466,8 @@ function drawBody() {
   h += '</section></div>';
   // around you
   var tabs = { halal: '🍽️ Halal food', mosques: '🕌 Mosques', sights: '🏛️ More to see' };
-  var list = places(comp.tab, here).slice(0, 4);
+  // not the place where you are now
+  var list = places(comp.tab, here).filter(function (p) { return !(p._m < 40 && p.name === here.label); }).slice(0, 4);
   h += '<section class="cp-near"><div class="cp-near-h"><h4>Around ' + (comp.here ? 'you' : esc(here.label)) + '</h4>' +
     '<button type="button" class="cp-loc" data-loc="1">📍 ' + (comp.here ? 'Update my location' : 'Use my location') + '</button></div>' +
     (comp.msg ? '<p class="cp-msg">' + esc(comp.msg) + '</p>' : '') +
@@ -432,9 +481,10 @@ function drawBody() {
       if (p.topic && p.topic.length) b += '<span class="badge topic">Known for ' + esc(p.topic.join(' & ')) + '</span>';
       if (p.popular && comp.tab === 'sights') b += '<span class="badge must">Must-see</span>';
       if (p.kids_ok && kids && comp.tab !== 'mosques') b += '<span class="badge kids">Good for kids</span>';
-      if (p.cuisine) b += '<span class="badge k">' + esc(String(p.cuisine).replace(/_/g, ' ')) + '</span>';
-      else if (p.categories && p.categories.length && comp.tab === 'sights') b += '<span class="badge k">' + esc(p.categories[0]) + '</span>';
+      if (p.cuisine) b += '<span class="badge k">' + esc(cuisine(p.cuisine)) + '</span>';
+      else if (p.categories && p.categories.length && comp.tab === 'sights') b += '<span class="badge k">' + esc(category(p.categories)) + '</span>';
       return '<li><button type="button" class="cp-show" data-lat="' + p.lat + '" data-lon="' + p.lon + '" data-name="' + esc(p.name) + '">' + esc(p.name) + '</button>' +
+        (p.unnamed ? ' <small class="unnamed">no name on the map</small>' : '') +
         (p._inPlan ? ' <span class="cp-inplan">in your plan</span>' : '') + '<span class="cp-sub"> · ' + w.text + '</span>' +
         (b ? '<div class="badges">' + b + '</div>' : '') + go(p, w.mode) + '</li>';
     }).join('') : '<li class="cp-sub">Nothing found within walking distance — try another tab.</li>') + '</ul>' +
@@ -445,6 +495,8 @@ function drawBody() {
 }
 // the city as the traveller wrote it ("London", not "Greater London")
 function cityOf(plan) { return String(comp.city || (plan.example && plan.example.destination) || plan.destination.name || '').split(',')[0].trim(); }
+// when a stop is over: its "until" (in time for the next prayer, or the closing time) or its usual length
+function endOf(s) { var t = mm(s.time); return s.until && mm(s.until) != null ? mm(s.until) : t + (DUR[s.kind] || 45); }
 function poolSize() { var n = comp.plan.nearby || {}; return ['halal', 'mosques', 'sights'].reduce(function (a, k) { return a + (n[k] || []).length; }, 0) + comp.plan.days.reduce(function (a, d) { return a + d.stops.length; }, 0); }
 // candidates of one kind near a point: the plan's own stops and the ones Qloo found but the plan did not use
 function places(kind, here) {
@@ -473,7 +525,10 @@ if (cpBox) {
   cpBox.addEventListener('click', function (e) {
     var b = e.target.closest('button'); if (!b) return;
     if (b.dataset.preview != null) { startPreview(+b.dataset.preview); showDayOnMap(comp.day); }
-    else if (b.dataset.close) { comp.mode = 'teaser'; comp.here = null; comp.msg = ''; if (comp.pin) { comp.pin.remove(); comp.pin = null; } drawCompanion(); }
+    else if (b.dataset.close) {
+      comp.mode = 'teaser'; comp.here = null; comp.msg = ''; if (comp.pin) { comp.pin.remove(); comp.pin = null; }
+      drawCompanion(); var again = cpBox.querySelector('.cp-try'); if (again) again.focus();  // keep the keyboard where it was
+    }
     else if (b.dataset.pday != null) { comp.day = +b.dataset.pday; comp.here = null; drawCompanion(); showDayOnMap(comp.day); }
     else if (b.dataset.tab) { comp.tab = b.dataset.tab; drawBody(); }
     else if (b.dataset.loc) locate(b);
@@ -534,13 +589,25 @@ function drawMap(plan) {
   var pts = [];
   plan.days.forEach(function (day, di) {
     var line = [], dl = L.layerGroup().addTo(layer); dayLayers.push(dl);
+    var same = {};  // one marker per place: a mosque used for three prayers is "3·5·7", not three markers on top of each other
     day.stops.forEach(function (s, si) {
       if (s.lat == null) return;
+      var k = (+s.lat).toFixed(4) + ',' + (+s.lon).toFixed(4);
+      (same[k] = same[k] || []).push(si);
+    });
+    day.stops.forEach(function (s, si) {
+      if (s.lat == null) return;
+      line.push([s.lat, s.lon]);
+      var k = (+s.lat).toFixed(4) + ',' + (+s.lon).toFixed(4), all = same[k];
+      if (all[0] !== si) { markers[di + '-' + si] = markers[di + '-' + all[0]]; return; }
       var col = s.kind === 'prayer' ? '#0F7A5C' : s.kind === 'meal' ? '#C2643F' : '#2F6FB3';
-      var icon = L.divIcon({ className: '', html: '<div class="num-icon" style="background:' + col + '">' + (si + 1) + '</div>', iconSize: [26, 26], iconAnchor: [13, 13] });
+      var label = all.map(function (i) { return i + 1; }).join('·'), wide = all.length > 1;
+      var icon = L.divIcon({ className: '', html: '<div class="num-icon' + (wide ? ' wide' : '') + '" style="background:' + col + '">' + label + '</div>',
+        iconSize: [wide ? 18 + 12 * all.length : 26, 26], iconAnchor: [wide ? (18 + 12 * all.length) / 2 : 13, 13] });
+      var times = all.map(function (i) { return esc(day.stops[i].time) + (day.stops[i].prayer ? ' ' + esc(day.stops[i].prayer) : ''); }).join(', ');
       var m = L.marker([s.lat, s.lon], { icon: icon }).addTo(dl)
-        .bindPopup('<b>Day ' + (di + 1) + ' · ' + esc(s.time) + '</b><br>' + esc(s.name) + (s.halal_level && s.kind === 'meal' ? '<br><i>' + LEVEL[s.halal_level] + '</i>' : '') + navLinks(s));
-      markers[di + '-' + si] = m; pts.push([s.lat, s.lon]); line.push([s.lat, s.lon]);
+        .bindPopup('<b>Day ' + (di + 1) + ' · ' + times + '</b><br>' + esc(s.name) + (s.halal_level && s.kind === 'meal' ? '<br><i>' + LEVEL[s.halal_level] + '</i>' : '') + navLinks(s));
+      markers[di + '-' + si] = m; pts.push([s.lat, s.lon]);
     });
     if (line.length > 1) L.polyline(line, { color: DAYCOL[di % DAYCOL.length], weight: 3, opacity: .55, dashArray: '6 6' }).addTo(dl);
   });

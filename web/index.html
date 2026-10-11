@@ -9,8 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri:wght@700&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/style.css?v=today2">
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/style.css?v=judge1">
 </head>
 <body>
 <header class="hero">
@@ -58,7 +58,7 @@
         <textarea name="tastes" rows="3" maxlength="600" placeholder="Films, books, music, food, sports…">We love Pixar movies, Ottoman history, football and spicy food. The kids are into Minecraft and dinosaurs.</textarea>
       </label>
       <button class="go" type="submit"><span>Plan my trip</span></button>
-      <p class="err" id="err" hidden></p>
+      <p class="err" id="err" role="alert" hidden></p>
       <div class="examples" aria-label="Example plans">
         <span>Or open an example plan instantly:</span>
         <button type="button" data-ex="london-family">London · family with kids</button>
@@ -104,6 +104,7 @@
     <h3>Rihla is planning your trip… <span id="elapsed" class="elapsed">0 s</span></h3>
     <ol class="steps" id="steps" aria-live="polite"></ol>
     <p class="hint">A new city can take a little longer the first time.</p>
+    <button type="button" class="cancel" id="cancel">Cancel</button>
   </div>
 </div>
 
@@ -114,7 +115,7 @@
   Halal labels show how sure we are — always confirm with the restaurant.
 </footer>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/app.js?v=today2"></script>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/app.js?v=judge1"></script>
 </body>
 </html>

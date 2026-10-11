@@ -2,7 +2,7 @@
   --ink:#14211F;--soft:#5B6B67;--line:#E4DCCB;--paper:#F7F2E8;--card:#FFFDF8;
   --teal:#0F4C45;--teal-2:#176B60;--gold:#C9A24A;--gold-2:#E6C877;
   --sight:#2F6FB3;--meal:#C2643F;--prayer:#0F7A5C;
-  --ok:#137A4B;--ok-bg:#E1F2E8;--maybe:#9A6A00;--maybe-bg:#FBEFD2;--ask:#6B7280;--ask-bg:#EEF0F2;
+  --ok:#137A4B;--ok-bg:#E1F2E8;--maybe:#7F5700;--maybe-bg:#FBEFD2;--ask:#5A6170;--ask-bg:#EEF0F2;
   --shadow:0 1px 0 rgba(20,33,31,.04),0 12px 30px -18px rgba(20,33,31,.35);
 }
 *{box-sizing:border-box}
@@ -33,7 +33,7 @@ a{color:var(--teal-2)}
 .hero h1 em{color:var(--gold-2);font-style:normal}
 .lead{font-size:17px;color:#D9E5E0;margin:0 0 20px;max-width:560px}
 .pills{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px}
-.peek{display:none;margin:18px 0 0}
+.peek{margin:18px 0 0}
 .peek button{font:600 15px Inter,sans-serif;color:var(--ink);background:var(--gold-2);border:0;border-radius:999px;padding:11px 18px;min-height:44px;cursor:pointer}
 .pills li{background:rgba(255,255,255,.09);border:1px solid rgba(230,200,119,.35);border-radius:999px;padding:6px 12px;font-size:13.5px}
 .form{padding:22px;color:var(--ink);display:flex;flex-direction:column;gap:14px}
@@ -75,7 +75,11 @@ main{padding:28px 20px 10px}
 .ptimes span b{font-weight:700;color:var(--ink);margin-left:4px}
 .stops{list-style:none;margin:10px 0 0;padding:0;position:relative}
 .stops:before{content:'';position:absolute;left:56px;top:6px;bottom:6px;width:2px;background:var(--line)}
-.stop{display:grid;grid-template-columns:46px 22px 1fr;gap:10px;padding:10px 0;cursor:pointer;border-radius:12px}
+.stop{display:grid;grid-template-columns:46px 22px minmax(0,1fr);gap:10px;padding:10px 0;cursor:pointer;border-radius:12px}
+.stop:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.stop .t small{display:block;font-weight:500;font-size:11px;color:var(--soft);line-height:1.2;margin-top:2px}
+.body h4,.body p{overflow-wrap:anywhere}
+small.unnamed{font-weight:500;font-size:12px;color:var(--soft)}
 .stop:hover .body h4{color:var(--teal-2)}
 .stop .t{font-weight:600;font-size:13.5px;color:var(--soft);padding-top:2px;text-align:right}
 .stop .dot{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:11px;color:#fff;font-weight:700;margin-top:1px;position:relative;z-index:1;box-shadow:0 0 0 4px var(--card)}
@@ -203,7 +207,7 @@ main{padding:28px 20px 10px}
 .cp-sub{margin:2px 0 0;color:var(--soft);font-size:13px}
 .cp-count{color:var(--prayer);font-weight:600}
 .cp-next{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
-.cp-k{font-size:12.5px;font-weight:600;color:var(--meal)}
+.cp-k{font-size:12.5px;font-weight:600;color:#A24E2C}
 .cp-near{margin-top:14px}
 .cp-near-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .cp-near-h h4{margin:0}
@@ -221,3 +225,13 @@ main{padding:28px 20px 10px}
 .here-icon{width:18px;height:18px;border-radius:50%;background:#1A73E8;border:3px solid #fff;box-shadow:0 0 0 6px rgba(26,115,232,.25),0 2px 6px rgba(0,0,0,.3)}
 @media (max-width:640px){.cp-grid{grid-template-columns:minmax(0,1fr)}.companion{padding:16px 14px}}
 @media (pointer:coarse){.cp-days button,.cp-tabs button,.cp-loc{min-height:44px}}
+
+/* judge review, 11.10: touch targets, small phones, cancel, the agent's steps up front, merged markers */
+@media (pointer:coarse){.quick button,.examples button{min-height:44px}}
+@media (max-width:360px){.thumb{display:none!important}}
+.loading .cancel{margin-top:12px;font:600 14px Inter,sans-serif;border:1px solid var(--line);background:#fff;color:var(--soft);border-radius:10px;padding:8px 14px;min-height:40px;cursor:pointer}
+.loading .cancel:hover{color:var(--ink);border-color:var(--soft)}
+.sum .meta .meta-trace{font:inherit;font-size:12.5px;background:#EEE9FB;color:#5B3FA8;border:0;border-radius:999px;padding:4px 10px;cursor:pointer;font-weight:600}
+.sum .meta .meta-trace:hover{text-decoration:underline}
+.trace .api{font-size:12px;color:#5B3FA8;font-weight:600;margin-right:4px}
+.num-icon.wide{width:auto;padding:0 7px;border-radius:13px;white-space:nowrap}

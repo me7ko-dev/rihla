@@ -18,7 +18,7 @@ from difflib import SequenceMatcher
 
 from openai import APIError, AsyncOpenAI, BadRequestError, RateLimitError
 
-from . import config, halal, osm, prayer, qloo
+from . import config, halal, osm, prayer, qloo, wiki
 
 log = logging.getLogger("rihla")
 MAX_STEPS = 6
@@ -42,11 +42,30 @@ STOP = set("""love loves loved like likes enjoy enjoys into also really very muc
 and the are is a an of for to in on at our my his her kids kid children child family families son sons daughter
 daughters wife husband aged age years old year who what all some any lot lots big fan fans favourite favorite
 especially things stuff place places food spicy good great movies movie films film books book novels novel music
-songs series shows show games game""".split())
+songs series shows show games game want wants wanted see seeing visit visiting trip travel city day days time tour
+explore interested interest new old top best around near most more just like way lot get go going can will would
+she he it its from this that these those""".split())
+# Qloo also tags hotels, restaurants, shops and offices as "tourist attraction" or "historical landmark": a place to
+# visit is not a place to sleep, eat, shop or book a tour. Some are fine when that is what they asked for (a bookstore).
+NOT_A_SIGHT = re.compile(r"\b(tour operator|tour agency|travel agency|car rental|rental agency|ticket agency|hotel|hostel|motel|"
+                         r"inn|ryokan|lodging|resort|guest house|bed and breakfast|apartment|serviced apartment|restaurant|"
+                         r"steakhouse|bar|pub|cabaret|night club|storage|warehouse|movers|moving company|convention center|"
+                         r"school|wedding venue|furniture|company|corporate office|office|bank|pharmacy|car dealer|"
+                         r"manufacturer|golf driving range|subway station|metro station|bus station|bus stop|tram stop|"
+                         r"light rail station|parking|residential)\b", re.I)
+# a shop, a club's office or a station is a sight only when it is also an attraction (Platform 9¾, Grand Central)
+SHOP = re.compile(r"\b(store|shop|boutique|mall|grocery|supermarket|charity|market|club|organization|association|"
+                  r"non profit|station|event venue|banquet hall|dance hall)\b", re.I)
+NOT_A_SIGHT_NAME = re.compile(r"\b(tours?|rentals?|travel agency|hostel|hotel)\b", re.I)  # "Toronto bicycle tour & events"
+# long closures the data does not show yet (the place is listed with opening hours): never planned as a visit
+CLOSED_FOR_YEARS = re.compile(r"^(the )?centre pompidou$|^ontario science centre$", re.I)
+ATTRACTION = re.compile(r"museum|gallery|landmark|historical|monument|memorial|zoo|aquarium|park|garden|palace|castle|"
+                        r"cathedral|church|mosque|temple|shrine|tourist attraction|observation|viewpoint|stadium|arena|library", re.I)
+HOTEL_TEXT = re.compile(r"\b(suites|guest rooms|butler service|complimentary breakfast|check-in|boutique hotel)\b", re.I)
+KIDS_PLACE = re.compile(r"children\W*s museum|childrens museum|playground|kids'? (?:club|zone|play)|soft play", re.I)
 # not for young kids, whatever the taste data says
-# Qloo also tags tour operators and rental desks as "tourist attraction": a place to visit is not an office
-NOT_A_SIGHT = re.compile(r"\b(tour operator|tour agency|travel agency|car rental|rental agency|ticket agency)\b", re.I)
-GRIM = re.compile(r"tortur|ripper|dungeon|horror|serial killer|execution|gallows|crime museum|sex|erotic|strip club", re.I)
+GRIM = re.compile(r"tortur|ripper|dungeon|horror|serial killer|execution|gallows|crime museum|\bsex|erotic|strip club|"
+                  r"macabre|anatom|specimens|surgeon|surgical|cadaver|morbid|cabaret|burlesque", re.I)
 
 SYSTEM = """You are Rihla, a travel planner for Muslim travellers and families.
 You plan real days in a real city using ONLY places returned by your tools. Rules:
@@ -69,6 +88,7 @@ You plan real days in a real city using ONLY places returned by your tools. Rule
 - "why" must be one short sentence: what the place is or is known for (from its "about" and "known_for") and why it
   suits THIS traveller (kids' ages, interests, faith). Do not mention "fans" or taste data: the app shows Qloo's
   taste matches next to each stop. Only state facts you can see in the tool results; never invent links.
+- Never write that a restaurant is halal, certified or alcohol-free (or not): the app shows an honest halal label.
 - Every day needs lunch and dinner from the food results, and prayer stops at mosques from mosques_near.
 - When you have what you need, stop calling tools and say READY. You will then be asked for the final JSON.
   Write all text in {language}."""
@@ -201,8 +221,10 @@ def _usable(final, days: int) -> bool:
     if not isinstance(tips, list):  # the model sometimes files the tips inside a day, or writes them as one text
         tips = next((d.pop("tips") for d in final["days"] if isinstance(d.get("tips"), list)), tips)
     if isinstance(tips, str):
-        tips = re.split(r"\s*(?:\n|;\s)\s*", tips)
-    final["tips"] = [t.strip() for t in tips if isinstance(t, str) and t.strip()] if isinstance(tips, list) else []
+        tips = [tips]
+    if isinstance(tips, list):  # one text with several tips: one per line, or "; " before a new sentence
+        tips = [t for x in tips if isinstance(x, str) for t in re.split(r"\s*\n\s*|;\s+(?=[A-Z])", x)]
+    final["tips"] = [t.strip() for t in tips if isinstance(t, str) and len(re.findall(r"\w", t)) >= 3] if isinstance(tips, list) else []
     return len(final["days"]) == days and all(d["stops"] for d in final["days"])
 
 
@@ -210,10 +232,14 @@ class Trip:
     """State of one planning run: the places the tools returned (by ref), the traveller's Qloo taste
     signals, and a trace for the UI."""
 
-    def __init__(self, dest: dict, travellers: str = "", tastes: str = ""):
+    def __init__(self, dest: dict, travellers: str = "", tastes: str = "", typed: str = "", language: str = "English"):
         self.dest = dest
-        # words the traveller used ("dinosaurs", "football"): matched against what reviewers say a place is known for
-        self.topics = {_singular(w) for w in re.findall(r"[a-z]{4,}", (tastes or "").lower()) if w not in STOP}
+        self.language = language or "English"
+        # the destination itself ("Sofia, Bulgaria") is never a stop, and its name is never a topic
+        self.dest_keys = {k for k in (_key(typed), _key(typed.split(",")[0]), _key(str(dest.get("name", "")).split(",")[0])) if k}
+        # words the traveller used ("dinosaurs", "street art"): matched against what reviewers say a place is known for
+        self.topics = _words(tastes) - {w for k in self.dest_keys for w in _words(k)}
+        self.named: set[str] = set()  # words of the names they wrote that Qloo knows ("Harry Potter")
         self.tastes = tastes or ""
         self.places: dict[str, dict] = {}
         self.pool: dict[str, dict[str, dict]] = {"halal": {}, "mosques": {}, "sights": {}}
@@ -227,6 +253,7 @@ class Trip:
             bool(BABY.search(travellers or "")) or any(a <= 12 for a in stated)
         self.audiences = [qloo.AUDIENCES["muslim"]] + ([qloo.AUDIENCES["kids"]] if self.kids else [])
         self.tags: dict[str, str] | None = None  # Qloo tags for the topics they wrote: tag id -> the word as written
+        self.lookups_left = 5  # extra mosque and food searches around stops far from any known mosque
         self.osm_task: asyncio.Task | None = None
         self._osm: dict | None = None
         self._osm_by: float | None = None
@@ -253,8 +280,17 @@ class Trip:
     def keep(self, ref: str, p: dict, source: str, pool: str | None = None) -> dict:
         """Remember a place the model may reference; in a pool, one entry per venue (Qloo and OSM often both have it)."""
         p = dict(p, ref=ref, source=source)
+        old = self.places.get(ref)
+        if old:  # the same place again from another tool: what we already know about it stays (asked for, a topic...)
+            for k in ("requested", "popular"):
+                p[k] = bool(p.get(k) or old.get(k))
+            for k in ("topic", "because"):
+                p[k] = list(dict.fromkeys((p.get(k) or []) + (old.get(k) or [])))[:2]
         self.places[ref] = p
-        if pool and p.get("lat") is not None:
+        for name, entries in self.pool.items():
+            if ref in entries:
+                entries[ref] = p if name == pool or pool is None else entries[ref]
+        if pool and p.get("lat") is not None and ref not in self.pool[pool]:
             same = _same_venue(p, self.pool[pool].values(), by_distance=pool == "mosques")
             if same is None:
                 self.pool[pool][ref] = p
@@ -307,14 +343,60 @@ def _same_venue(p: dict, others, by_distance: bool = False) -> dict | None:
     return None
 
 
+# words a reviewers' keyword may add to their topic and still be about it: "dinosaur fossils", "calligraphy exhibit"
+KEYWORD_EXTRAS = {"fossil", "skeleton", "exhibit", "exhibition", "display", "collection", "gallery", "room", "hall",
+                  "section", "model", "replica"}
+
+
+def _words(text: str) -> set[str]:
+    """The meaningful words of a text, singular, without accents ("Dinosaurs" -> "dinosaur", "Pokémon" -> "pokemon")."""
+    return {_singular(w) for w in re.findall(r"[^\W\d_]{3,}", halal._norm(text or "")) if w not in STOP}
+
+
+def _topic_hits(trip: Trip, it: dict) -> list[str]:
+    """What the place is known for that is exactly what they wrote: a reviewers' keyword all of whose words they used
+    ("dinosaurs"; "street art" but not "street food"; "Harry Potter" at Leadenhall Market), or a Qloo tag of their topic."""
+    mine = trip.topics | trip.named
+    every = lambda k: {_singular(w) for w in re.findall(r"[^\W\d_]{3,}", halal._norm(k))} - {"the", "and", "for", "with"}
+    hits = [_as_written(trip.tastes, k) for k in it.get("known_for") or []
+            if every(k) & mine and every(k) <= mine | KEYWORD_EXTRAS]
+    return list(dict.fromkeys(hits + [trip.tags[t] for t in it.get("tag_ids") or [] if t in (trip.tags or {})]))[:2]
+
+
+def _not_a_sight(it: dict, trip: Trip | None = None, wanted: set[str] | None = None) -> bool:
+    """A hotel, restaurant, shop, office or the city itself — not a place to visit (unless it is what they asked
+    for: a bookstore for readers, a cafe). Kids-only places are not for adults; grim ones not for children."""
+    wanted = wanted or set()
+    cats = [c for c in it.get("categories") or [] if c not in wanted]
+    if it.get("lodging") or it.get("closed_for_good"):
+        return True
+    # "suites" in the text of a hotel; the Burj Khalifa has suites too, but it is the world's tallest building
+    if HOTEL_TEXT.search(it.get("description") or "") and not (float(it.get("popularity") or 0) >= 0.99 or it.get("requested")):
+        return True
+    if any(NOT_A_SIGHT.search(c) and not ("cafe" in wanted and "restaurant" in c) for c in cats):
+        return True
+    attraction = any(ATTRACTION.search(c) for c in it.get("categories") or [])
+    if any(SHOP.search(c) for c in cats) and not attraction:
+        return True
+    if (NOT_A_SIGHT_NAME.search(it.get("name") or "") and not attraction) or CLOSED_FOR_YEARS.search((it.get("name") or "").strip()):
+        return True
+    if trip is not None:
+        if _key(it.get("name", "")) in trip.dest_keys:
+            return True
+        text = " ".join(it.get("categories") or []) + " " + (it.get("name") or "")
+        if not trip.kids and KIDS_PLACE.search(text):
+            return True
+        if trip.kids and GRIM.search((it.get("name") or "") + " " + (it.get("description") or "")):
+            return True
+    return False
+
+
 def _qplace(it: dict, kind: str, trip: Trip, lat: float, lon: float, because: list[str] | None = None) -> dict:
     """A Qloo place as Rihla's place dict; 'because' = the traveller's tastes it matches."""
     because = because or []
-    hits = [_as_written(trip.tastes, k) for k in it.get("known_for") or []
-            if trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())}]
-    hits = list(dict.fromkeys(hits + [trip.tags[t] for t in it.get("tag_ids") or [] if t in (trip.tags or {})]))[:2]
+    hits = _topic_hits(trip, it)
     p = {k: it.get(k) for k in ("name", "lat", "lon", "address", "image", "website", "rating", "categories", "affinity",
-                                "description", "known_for", "hours")}
+                                "description", "known_for", "hours", "lodging", "closed_for_good", "popularity")}
     p["kids_ok"] = (it.get("kids") or 0) >= 0.3
     p["topic"] = hits
     p.update(kind=kind, because=because, qloo_halal=qloo.halal_signal(it), alcohol=qloo.serves_alcohol(it), qloo_id=it["id"],
@@ -417,24 +499,31 @@ async def _lookup_one(trip: Trip, q: str, query: str, kind: str | None) -> tuple
             cands.setdefault(e["id"], e)
         elif e["type"] == "urn:entity:place" and e.get("lat") is not None and \
                 osm.distance_m(e["lat"], e["lon"], trip.dest["lat"], trip.dest["lon"]) < 40000 and \
-                (_key(e["name"]) == key or re.search(r"\b" + re.escape(key) + r"\b", _key(e["name"]))):
+                (_key(e["name"]) == key or re.search(r"\b" + re.escape(key) + r"\b", _key(e["name"]))) and \
+                not _not_a_sight(dict(e, requested=_key(e["name"]) == key), trip):
+            # "Hertha BSC" the club shop, or "Burj Khalifa/ Dubai Mall Metro Station", is not what they asked to visit
             places.append(e)
     if places:  # they want to go there: a must-visit stop
-        it = max(places, key=lambda e: (_key(e["name"]) == key, e.get("popularity") or 0))
+        # "Louvre": the museum rather than its glass pyramid (equally popular, so the museum category decides)
+        it = max(places, key=lambda e: (_key(e["name"]) == key, round(float(e.get("popularity") or 0), 2),
+                                        any(ATTRACTION.search(c) and "tourist attraction" not in c for c in e.get("categories") or [])))
         p = _qplace(it, "landmark", trip, trip.dest["lat"], trip.dest["lon"])
         p["requested"] = True
         # "Burj Khalifa" is one place: its words must not match other places' keywords ("Burj al Arab")
-        trip.topics -= {_singular(w) for w in re.findall(r"[a-z]{4,}", key)}
+        trip.topics -= _words(key)
         ref = "qloo:" + str(it["id"])
         trip.keep(ref, p, "qloo", "sights")
         return [{"ref": ref, "name": it["name"], "type": "place",
                  "note": "a place the traveller wants to visit: include it in the plan"}], f"{it['name']} (a place to visit)"
 
+    podcasts = "podcast" in trip.tastes.lower()
+
     def score(e: dict) -> float:
         name = _key(e["name"])
         whole = bool(key) and re.search(r"\b" + re.escape(key) + r"\b", name)  # "marvel" is not in "marvelous"
         match = 1.0 if name == key else 0.7 if whole else 0.3 if SequenceMatcher(None, key, name).ratio() >= 0.8 else 0
-        if not match:
+        # "Ottoman history" is a topic, not the "Ottoman History Podcast": a podcast only if they wrote about one
+        if not match or (e["type"] == "urn:entity:podcast" and not podcasts and want != "urn:entity:podcast"):
             return 0
         person = e["type"] in PEOPLE or (e["type"] == "urn:entity:author" and want != "urn:entity:book")
         fit = 0.3 if e["type"] == want else -0.3 if want in WORKS and person else 0
@@ -448,6 +537,9 @@ async def _lookup_one(trip: Trip, q: str, query: str, kind: str | None) -> tuple
     # show the traveller's own words ("Percy Jackson"), not "The Lightning Thief (Percy Jackson and the Olympians, #1)"
     shown = q if re.search(r"\b" + re.escape(key) + r"\b", _key(top["name"])) and len(top["name"]) > len(q) else top["name"]
     trip.signals.setdefault(str(top["id"]), shown)
+    # "Toronto Maple Leafs" is a team: "maple" or "leaf" must not make a park "known for" what they love
+    trip.named |= _words(q)
+    trip.topics -= _words(q)
     note = f"{top['name']} ({str(top['type']).rsplit(':', 1)[-1].replace('_', ' ')})"
     return [{"ref": "qloo:" + str(e["id"]), "name": e["name"], "type": str(e["type"]).rsplit(":", 1)[-1]} for e in ranked[:3]], note
 
@@ -493,8 +585,8 @@ async def _topic_tags(trip: Trip) -> dict[str, str]:
     them on Qloo's side too. A tag counts only if its name is the word they wrote (no loose semantic neighbours)."""
     if trip.tags is not None:
         return trip.tags
-    text = trip.tastes.lower()
-    named = {_singular(w) for n in trip.signals.values() for w in re.findall(r"[a-z]{4,}", n.lower())}  # already signals
+    text = halal._norm(trip.tastes)
+    named = trip.named | {w for n in trip.signals.values() for w in _words(n)}  # already taste signals
     words = sorted(trip.topics - named, key=lambda w: (text.find(w) if w in text else len(text)))[:TOPIC_TAGS]
     found = await asyncio.gather(*[qloo.find_tags(w, take=8, places=True) for w in words], return_exceptions=True)
     trip.tags = {}
@@ -503,7 +595,7 @@ async def _topic_tags(trip: Trip) -> dict[str, str]:
         written = m.group(0) if m else w
         for t in tags if isinstance(tags, list) else []:
             name = str(t.get("name") or "").lower()
-            if t.get("id") and w in {_singular(x) for x in re.findall(r"[a-z]{4,}", name)}:
+            if t.get("id") and w in _words(name):
                 trip.tags[t["id"]] = written
     if trip.tags:
         trip.trace.append({"tool": "topic_tags", "args": {"topics": words}, "found": len(trip.tags),
@@ -525,8 +617,9 @@ async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
     avoid = (() if "cafe" in cats else qloo._cat("restaurant", "fast_food_restaurant", "bar_and_grill")) + \
             (() if "shopping" in cats else qloo._cat("clothing_store", "department_store", "shopping_mall", "gift_shop"))
     ask = dict(audiences=trip.audiences, lat=lat, lon=lon, radius_m=radius, exclude_tags=avoid)
-    solo = refs[:5] if len(refs) > 1 else []
+    solo = refs[:5]  # each taste on its own: the honest basis for "because you love X"
     topic_ids = list(await _topic_tags(trip))
+    wanted = {t.rsplit(":", 1)[-1].replace("_", " ") for t in union}
 
     async def ranked():  # with their topics as tag signals; as before if Qloo refuses them
         try:
@@ -540,26 +633,29 @@ async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
                                qloo.insights("place", tags=union, take=30, lat=lat, lon=lon, radius_m=radius,
                                              exclude_tags=avoid),  # the city's best-loved places: no taste, no audience
                                *[qloo.insights("place", interests=[r], tags=union, take=20, **ask) for r in solo],
+                               # the same audiences without any taste: what a taste adds is measured against this
+                               qloo.insights("place", tags=union, take=30, **ask),
                                return_exceptions=True)
-    ok = lambda it: it.get("lat") is not None and not (trip.kids and GRIM.search(it["name"] + " " + it.get("description", ""))) \
-        and not NOT_A_SIGHT.search(" ".join(it.get("categories") or []))
+    ok = lambda it: it.get("lat") is not None and not _not_a_sight(it, trip, wanted)
     together, famous = [[it for it in x if ok(it)] if isinstance(x, list) else [] for x in res[:2]]
     combined = [[it for it in together if set(it["tag_ids"]) & set(qloo.CATEGORIES[c])] for c in cats]
-    own = {r: [it for it in x if ok(it)] if isinstance(x, list) else [] for r, x in zip(solo, res[2:])}
+    own = {r: [it for it in x if ok(it)] if isinstance(x, list) else [] for r, x in zip(solo, res[2:-1])}
+    baseline = [it for it in res[-1] if ok(it)] if isinstance(res[-1], list) else famous
     popular = {it["id"] for it in famous[:12]}
     everything = {it["id"]: it for lst in [together, famous, *own.values()] for it in lst}
 
     def topic(it: dict) -> bool:
-        return bool(set(it.get("tag_ids") or ()) & set(topic_ids)) or \
-            any(trip.topics & {_singular(w) for w in re.findall(r"[a-z]{4,}", k.lower())} for k in it.get("known_for") or [])
-    top10 = {r: [it["id"] for it in items[:10]] for r, items in own.items()}
+        return bool(_topic_hits(trip, it))
+    # "Because you love X" only where X itself lifts the place: in X's own top 10 and at least 5 places higher than in
+    # the same query without any taste. In a small city every taste's top 10 is the same famous ten — no badge there.
+    base = {it["id"]: i for i, it in enumerate(baseline)}
+    lifted = {r: {it["id"]: i for i, it in enumerate(items[:10]) if base.get(it["id"], 99) - i >= 5} for r, items in own.items()}
 
-    near_top = {it["id"] for it in together[:10]}
-
-    def because(pid: str) -> list[str]:
-        if len(refs) == 1:  # one taste: only the places it ranks highest, not every place on the list
-            return [trip.signals[refs[0]]] if pid in near_top else []
-        return [trip.signals[r] for _, r in sorted((ids.index(pid), r) for r, ids in top10.items() if pid in ids)][:2]
+    def because(it: dict) -> list[str]:
+        if OUTDOOR.search(" ".join(it.get("categories") or [])) and not topic(it):
+            return []  # a park or a square is not "because you love Pixar"
+        best = min(((ids[it["id"]], r) for r, ids in lifted.items() if it["id"] in ids), default=None)
+        return [trip.signals[best[1]]] if best else []
 
     out, seen = {}, set()
     for c, items in zip(cats, combined):
@@ -578,7 +674,7 @@ async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
             if it["id"] in seen:
                 continue
             seen.add(it["id"])
-            p = _qplace(it, c, trip, lat, lon, because(it["id"]))
+            p = _qplace(it, c, trip, lat, lon, because(it))
             p["popular"] = it["id"] in popular
             if c == "cafe":
                 p["halal_level"], p["halal_reason"] = halal.level(p, cc)
@@ -595,17 +691,26 @@ async def _run_place_tool(trip: Trip, name: str, args: dict) -> tuple[list | dic
         lat, lon = _point(trip, args)
         radius = min(max(int(args.get("radius_m") or 1500), 800), 3000)
         # in Muslim-majority countries almost no restaurant is tagged halal (nearly all food is): ask for restaurants
-        tags = qloo.RESTAURANT if cc in halal.MUSLIM_MAJORITY else (qloo.HALAL_CUISINE,)
+        muslim_country = cc in halal.MUSLIM_MAJORITY
+        tags = qloo.RESTAURANT if muslim_country else (qloo.HALAL_CUISINE,)
         radius = max(radius, 2000)
+        # there, restaurants that serve alcohol are the exception: ask for the others first
+        no_drinks = tuple(qloo.SERVES_ALCOHOL) if muslim_country else ()
+        ask = dict(interests=list(trip.signals), audiences=trip.audiences, lat=lat, lon=lon, radius_m=3000, tags=tags, take=25)
         items, area = await asyncio.gather(
-            qloo.insights("place", interests=list(trip.signals), audiences=trip.audiences, lat=lat, lon=lon,
-                          radius_m=3000, tags=tags, exclude_tags=qloo._cat("hotel", "lodging"), take=25),
+            qloo.insights("place", exclude_tags=qloo._cat("hotel", "lodging") + no_drinks, **ask),
             trip.osm(15), return_exceptions=True)
         items = items if isinstance(items, list) else []
+        if muslim_country and len(items) < 8:
+            try:
+                more = await qloo.insights("place", exclude_tags=qloo._cat("hotel", "lodging"), **ask)
+                items += [x for x in more if x["id"] not in {i["id"] for i in items}]
+            except Exception:
+                pass
         area = area if isinstance(area, dict) else EMPTY_AREA
         found = []
         for it in items:
-            if it.get("lat") is None:
+            if it.get("lat") is None or it.get("closed_for_good") or it.get("lodging"):
                 continue
             p = _qplace(it, "restaurant", trip, lat, lon)
             match = halal.match_verified(p, area["halal"])
@@ -646,7 +751,7 @@ async def _run_place_tool(trip: Trip, name: str, args: dict) -> tuple[list | dic
             items = await qloo.insights("place", audiences=trip.audiences, lat=lat, lon=lon, radius_m=radius,
                                         tags=qloo.CATEGORIES["landmark"] + qloo.CATEGORIES["museum"] + qloo.CATEGORIES["park"], take=20)
             out = [_compact(trip.keep("qloo:" + str(it["id"]), _qplace(it, "landmark", trip, lat, lon), "qloo", "sights"))
-                   for it in items if it.get("lat") is not None]
+                   for it in items if it.get("lat") is not None and not _not_a_sight(it, trip)]
         return sorted(out, key=lambda p: p.get("distance_m", 0))[:20], f"{len(out)} sights"
     return {"error": f"unknown tool {name}"}, ""
 
@@ -749,10 +854,11 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
             dest = None
     if not dest:
         raise ValueError(f"Could not find '{destination}' on the map")
-    trip = Trip(dest, travellers, tastes)
+    trip = Trip(dest, travellers, tastes, destination, language)
     # OpenStreetMap can be slow for a new city: fetch it in the background while the agent works with Qloo
     trip.osm_task = asyncio.create_task(osm.area(dest["lat"], dest["lon"], AREA_M,
                                                  all_food=dest["country_code"] in halal.MUSLIM_MAJORITY))
+    trip.osm_task.add_done_callback(lambda t: t.cancelled() or t.exception())  # an Overpass failure is expected, not news
     days = max(1, min(days, 4))
     await emit({"type": "step", "text": f"Getting prayer times for {days} day{'s' if days > 1 else ''}"})
     prayers = await asyncio.gather(*[_prayer_times(dest, start + dt.timedelta(days=i)) for i in range(days)])
@@ -808,8 +914,10 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
             msgs.append({"role": "tool", "tool_call_id": tc.id, "content": _fit(result, 16000)})
     if model_down and not trip.signals and not trip.pool["sights"]:
         await _research_without_model(trip, tastes, emit)
-    # 2) make sure every day's area has halal food and a mosque, even if the model skipped those tools
-    extra = await _fill_gaps(trip, days, emit)
+    # 2) names they wrote that the model did not look up ("We want to see the Burj Khalifa"), then halal food and a
+    # mosque in every day's area, even if the model skipped those tools
+    extra = await _missed_names(trip, tastes, emit) if not model_down else {}
+    extra.update(await _fill_gaps(trip, days, emit))
     if not trip.places:
         raise RuntimeError("No places were found for this destination")
     # 3) compose: one JSON answer (more robust than a huge tool call)
@@ -852,6 +960,10 @@ async def plan(destination: str, days: int, start: dt.date, travellers: str, tas
         trip.trace.append({"tool": "compose_plan", "args": {}, "found": sum(len(d["stops"]) for d in final["days"]),
                            "note": "the AI writer's plan could not be used: Rihla assembled the plan from the same Qloo results"})
         result = await _enrich(final, trip, prayers)
+    if not model_down:
+        await emit({"type": "step", "text": "Checking the titles and texts against the final plan"})
+        await _edit_texts(result, trip, llm, travellers, tastes)
+    await _wiki_photos(result)
     result["seconds"] = round(time.time() - t0)
     result["qloo_calls"] = {k: qloo.stats[k] - q0[k] for k in q0}
     return result
@@ -867,11 +979,33 @@ async def _prayer_times(dest: dict, date: dt.date) -> dict:
     return {"date": date.isoformat(), "hijri": "", "timings": {}, "method": "", "timezone": "", "missing": True}
 
 
+def _written_names(tastes: str) -> list[str]:
+    """Names the traveller wrote with capitals mid-sentence: "Orhan Pamuk", "Burj Khalifa", "Minecraft"."""
+    return list(dict.fromkeys(m.strip(" ,.;") for m in
+                              re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)", tastes or "")))
+
+
+async def _missed_names(trip: Trip, tastes: str, emit) -> dict:
+    """Names of two or more words that the model did not look up (it sometimes sends only "Frozen" and forgets
+    "Burj Khalifa"): Rihla looks them up itself, so a place they want to see is never lost."""
+    asked = [_key(str(x.get("query", ""))) for t in trip.trace if t["tool"] == "taste_entities"
+             for x in (t["args"].get("items") or []) if isinstance(x, dict)]
+    names = [n for n in _written_names(tastes) if len(n.split()) >= 2 and _key(n) not in trip.dest_keys
+             and not any(_key(n) in a or a in _key(n) for a in asked if a)][:4]
+    if not names:
+        return {}
+    args = {"items": [{"query": n, "kind": None} for n in names]}
+    await emit({"type": "step", "id": "missed", "text": _step_text("taste_entities", args)})
+    result, note = await _safe_tool(trip, "taste_entities", args)
+    trip.trace.append({"tool": "taste_entities", "args": args, "found": _count(result), "note": note + " (names the model skipped)"})
+    await emit({"type": "found", "id": "missed", "n": _count(result)})
+    return {"taste_entities for names you did not look up": result}
+
+
 async def _research_without_model(trip: Trip, tastes: str, emit) -> None:
     """The language model is down: run the research tools directly — names the traveller wrote become taste
     signals, then places, halal food and mosques around the destination."""
-    names = list(dict.fromkeys(m.strip(" ,.;") for m in
-                               re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)", tastes or "")))
+    names = _written_names(tastes)
     steps = [("taste_entities", {"items": [{"query": n, "kind": None} for n in names[:6]]})] if names else []
     steps.append(("taste_places", {"categories": ["museum", "landmark", "park"] + (["family"] if trip.kids else []),
                                    "interest_refs": []}))
@@ -943,7 +1077,7 @@ def _prayer_name(hhmm: str, timings: dict) -> str:
 
 STOP_FIELDS = ("name", "lat", "lon", "address", "cuisine", "halal_level", "halal_reason", "website", "image", "source",
                "affinity", "because", "categories", "rating", "alcohol", "description", "kids_ok", "topic", "popular",
-               "open_today", "requested")
+               "open_today", "requested", "unnamed")
 
 
 def _fill_stop(s: dict, p: dict) -> dict:
@@ -952,9 +1086,13 @@ def _fill_stop(s: dict, p: dict) -> dict:
     return s
 
 
-def _short(text: str, n: int = 120) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + "…"
+def _short(text: str, n: int = 140) -> str:
+    """At most n characters, cut at the end of a sentence when there is one (never in the middle of a thought)."""
+    text = " ".join((text or "").split())
+    if len(text) <= n:
+        return text
+    cut = max(text.rfind(". ", 0, n), text.rfind("! ", 0, n), text.rfind("? ", 0, n))
+    return text[:cut + 1] if cut >= min(40, n // 3) else text[:n].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
 def _why(p: dict) -> str:
@@ -974,22 +1112,32 @@ def _centre(day: dict, fallback: tuple[float, float]) -> tuple[float, float]:
 
 
 DURATION = {"sight": 75, "meal": 60, "prayer": 20, "rest": 45}  # minutes a stop usually takes
-MIN_STAY = 30  # a visit that would have less time than this before a prayer starts after the prayer instead
+MIN_STAY = 30  # a visit with less time than this before a prayer (and the way to the mosque) starts after the prayer
+JUMUAH_EARLY = 15  # arrive early for the Friday sermon
 LATEST = 21 * 60 + 30  # nothing new starts after 21:30
 MEAL_GAP = 150  # a second meal less than 2.5 hours after the first is one meal too many
 # parks, gardens, fountains, viewpoints: places to see in daylight
-OUTDOOR = re.compile(r"\b(park|garden|gardens|zoo|playground|fountain|square|bridge|viewpoint|beach|promenade|pier)\b", re.I)
+OUTDOOR = re.compile(r"\b(park|garden|gardens|zoo|playground|fountain|square|bridge|viewpoint|scenic spot|scenic|lookout|"
+                     r"mirador|beach|promenade|pier|walk)\b", re.I)
 INDOOR = re.compile(r"museum|gallery|stadium|arena|mall|theat|aquarium|library|cinema", re.I)  # Madison Square Garden
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+# a burger chain is never the taste-matched meal Rihla promises (it may still be the only halal option nearby)
+CHAINS = re.compile(r"\b(mcdonald'?s|burger king|kfc|subway|starbucks|domino'?s|pizza hut|dunkin'?|popeyes|taco bell|"
+                    r"wendy'?s|papa john'?s|little caesars|tim hortons|costa coffee|five guys|hardee'?s|carl'?s jr)\b", re.I)
 
 
 def _opening(p: dict, date: str | None) -> tuple[int, int] | None | bool:
     """Qloo opening hours of a place on that date: (opens, closes) in minutes, False if closed, None if unknown."""
+    hours = p.get("hours") if isinstance(p.get("hours"), dict) else {}
     try:
-        slots = (p.get("hours") or {}).get(WEEKDAYS[dt.date.fromisoformat(date).weekday()])
+        slots = hours.get(WEEKDAYS[dt.date.fromisoformat(date).weekday()])
     except (TypeError, ValueError):
         return None
     if not slots:
+        return None
+    # Qloo marks some places closed every day of the week (the East Side Gallery, the Latin Bridge): that is
+    # missing data, not a place that never opens
+    if all(all(x.get("closed") for x in v) for v in hours.values() if v):
         return None
     if all(x.get("closed") for x in slots):
         return False
@@ -1002,11 +1150,20 @@ def _opening(p: dict, date: str | None) -> tuple[int, int] | None | bool:
     return (o, c if c > o else 24 * 60)  # closes after midnight
 
 
+def _hours_text(hours: tuple[int, int]) -> str:
+    if hours[0] == 0 and hours[1] >= 24 * 60 - 1:
+        return "24 hours"
+    return f"{_hhmm(hours[0])}–" + ("midnight" if hours[1] >= 24 * 60 else _hhmm(hours[1]))
+
+
 def _friday(date: str | None) -> bool:
     try:
         return dt.date.fromisoformat(date).weekday() == 4
     except (TypeError, ValueError):
         return False
+
+
+JUMUAH_WHY = "Jumu'ah, the Friday congregational prayer with a sermon — arrive 15 minutes early; allow about 45 minutes."
 
 
 def _jumuah(final: dict, trip: Trip) -> None:
@@ -1026,7 +1183,7 @@ def _jumuah(final: dict, trip: Trip) -> None:
                     st.clear()
                     st.update(_fill_stop(dict(keep, ref=big["ref"]), big))
                 st["jumuah"] = True
-                st["why"] = "Jumu'ah, the Friday congregational prayer with a sermon — arrive 15 minutes early; allow about 45 minutes."
+                st["why"] = JUMUAH_WHY
                 # nothing else may start during the Friday prayer
                 for other in day["stops"]:
                     o = _mins(other.get("time", "")) or 0
@@ -1042,20 +1199,33 @@ def _open_at(p: dict, date: str | None, t: int) -> bool:
 
 
 def _check_hours(final: dict, trip: Trip, drop: bool = True) -> None:
-    """Visit places while they are open: move a visit to opening time, drop it if the place is closed that day."""
-    for day in final.get("days", []):
+    """Visit places while they are open: a visit before opening time moves to the opening; a place closed that day
+    moves to another day of the trip when it is open then, or is left out."""
+    days = final.get("days", [])
+    for day in days:
         for st in list(day["stops"]):
             if st.get("kind") != "sight":
                 continue
-            hours = _opening(trip.places.get(st.get("ref"), {}), day.get("date"))
+            place = trip.places.get(st.get("ref"), {})
+            hours = _opening(place, day.get("date"))
             t = _mins(st.get("time", "")) or 0
             if hours is False or (hours and t >= hours[1] - 45):
-                if drop:
-                    day["stops"].remove(st)
+                if not drop:
+                    continue
+                day["stops"].remove(st)
+                if hours is False:  # closed that day: on another day of the trip, if it is open then
+                    other = min((d for d in days if d is not day and _opening(place, d.get("date")) is not False
+                                 and all(x.get("ref") != st.get("ref") for x in d["stops"])),
+                                key=lambda d: sum(1 for x in d["stops"] if x.get("kind") == "sight"), default=None)
+                    if other is not None:
+                        h = _opening(place, other.get("date"))
+                        if h and not (h[0] <= t <= h[1] - 75):
+                            t = (h[0] + 14) // 15 * 15
+                        other["stops"].append(dict(st, time=_hhmm(t)))
+                        other["stops"].sort(key=lambda x: _mins(x.get("time", "")) or 0)
                 continue
             if hours:
-                st["open_today"] = "24 hours" if hours[0] == 0 and hours[1] >= 24 * 60 - 1 else \
-                    f"{_hhmm(hours[0])}–{_hhmm(hours[1] % (24 * 60))}"
+                st["open_today"] = _hours_text(hours)
                 if t < hours[0]:
                     st["time"] = _hhmm((hours[0] + 14) // 15 * 15)
         day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
@@ -1075,13 +1245,53 @@ def _near_stop(day: dict, t: int, fallback: tuple[float, float]) -> tuple[float,
     return st["lat"], st["lon"]
 
 
+def _meal_score(x: dict, cc: str = "") -> float:
+    """Lower is better: the surest halal first, no alcohol, a local place rather than a burger chain, their taste,
+    then distance (metres). Where nearly all food is halal, "likely" is almost as good as "listed"."""
+    step = 300 if cc in halal.MUSLIM_MAJORITY else 700
+    return (step * RANK.get(x.get("halal_level"), 3) + 900 * bool(x.get("alcohol")) + 800 * bool(CHAINS.search(x.get("name") or ""))
+            - 250 * bool(x.get("because")) - 200 * float(x.get("affinity") or 0) + 400 * bool(x.get("unnamed"))
+            + float(x.get("distance_m") or 0))
+
+
+LODGING_NAME = re.compile(r"\b(hotel|hostel|guest ?house|inn|residence|apartments?|ゲストハウス|ホテル)\b", re.I)
+
+
+def _mosque_score(m: dict) -> float:
+    """Metres, with a named mosque from Qloo (photo, description) preferred to an unnamed one on the map, and a
+    real mosque to a prayer room in a hotel or guest house."""
+    return (float(m.get("distance_m") or 0) + 400 * bool(m.get("unnamed")) - 250 * (m.get("source") == "qloo")
+            + 600 * bool(LODGING_NAME.search(m.get("name") or "")))
+
+
+def _outdoor(p: dict) -> bool:
+    words = " ".join([p.get("name") or ""] + list(p.get("categories") or []))
+    return bool((p.get("place_kind") == "park" or p.get("kind") == "park" or OUTDOOR.search(words)) and not INDOOR.search(words))
+
+
+def _sunset(day: dict) -> int | None:
+    return _mins((day.get("prayer_times") or {}).get("Maghrib", "")) or \
+        next((_mins(p.get("time", "")) for p in day["stops"] if p.get("prayer") == "Maghrib"), None)
+
+
+def _a_sight(x: dict, trip: Trip) -> bool:
+    """Can this pool place be added as a visit? Not food, not a hotel or shop; a mosque only if it is a famous one."""
+    if x.get("halal_level") or _not_a_sight(x, trip):
+        return False
+    cats = " ".join(x.get("categories") or [])
+    if x.get("kind") == "mosque" or re.search(r"\bmosque\b", cats):
+        return bool(x.get("popular") or re.search(r"tourist attraction|historical|landmark", cats))
+    return True
+
+
 def _fill_days(final: dict, trip: Trip) -> None:
     """A day should not have long empty stretches: fill gaps with the best nearby place the tools found
     (famous highlights and taste matches first), and make sure there is a lunch and a dinner."""
     days = final.get("days", [])
-    used = {_key(st.get("name", "")) for d in days for st in d["stops"] if st.get("kind") != "prayer"}
+    used = {k for d in days for st in d["stops"] if st.get("kind") != "prayer" for k in [_key(st.get("name", ""))] if k}
     target = 3 if trip.kids else 4
     home = (trip.dest["lat"], trip.dest["lon"])
+    cc = trip.dest.get("country_code", "")
     for day in days:
         # Dhuhr, Asr and Maghrib every day, at the mosque nearest to where the traveller is then
         have = {st.get("prayer") for st in day["stops"] if st.get("kind") == "prayer"}
@@ -1089,26 +1299,44 @@ def _fill_days(final: dict, trip: Trip) -> None:
             t = _mins((day.get("prayer_times") or {}).get(name, ""))
             if name in have or t is None:
                 continue
-            mosque = next(iter(trip.near("mosques", *_near_stop(day, t, home), 6000, 1)), None)
+            mosque = min(trip.near("mosques", *_near_stop(day, t, home), 6000, 15), key=_mosque_score, default=None)
             if mosque:
                 day["stops"].append(_fill_stop({"time": _hhmm(t), "kind": "prayer", "prayer": name, "ref": mosque["ref"],
-                                                "added_by": "rihla", "why": f"{name} at the mosque nearest to your other stops."}, mosque))
-        # lunch and dinner
-        for lo, hi, at, label in ((11 * 60 + 30, 14 * 60 + 30, 12 * 60 + 30, "lunch"), (18 * 60, 21 * 60, None, "dinner")):
+                                                "added_by": "rihla", "why": ""}, mosque))
+        # lunch and dinner; a meal before 11:30 (and none at lunchtime) becomes lunch at noon
+        early = [st for st in day["stops"] if st.get("kind") == "meal" and 10 * 60 <= (_mins(st.get("time", "")) or 0) < 11 * 60 + 30]
+        if early and not any(st.get("kind") == "meal" and 11 * 60 + 30 <= (_mins(st.get("time", "")) or 0) <= 14 * 60 + 30
+                             for st in day["stops"]) and _open_at(trip.places.get(early[0].get("ref"), {}), day.get("date"), 12 * 60):
+            early[0]["time"] = "12:00"
+        # pray, then eat: lunch just after Dhuhr (after Jumu'ah on Fridays), never before noon
+        dhuhr = _mins((day.get("prayer_times") or {}).get("Dhuhr", ""))
+        lunch = max(12 * 60, dhuhr + (60 if _friday(day.get("date")) else 20)) if dhuhr and 11 * 60 <= dhuhr <= 14 * 60 else 12 * 60 + 30
+        lunch = (lunch + 4) // 5 * 5
+        for lo, hi, at in ((11 * 60 + 30, 14 * 60 + 30, lunch), (18 * 60, 21 * 60, None)):
             if any(st.get("kind") == "meal" and lo <= (_mins(st.get("time", "")) or 0) <= hi for st in day["stops"]):
                 continue
             if at is None:  # dinner after Maghrib
                 at = min(((_mins((day.get("prayer_times") or {}).get("Maghrib", "")) or 18 * 60) + 25), 20 * 60 + 30)
             here = _near_stop(day, at, home)
-            options = [x for x in trip.near("halal", *here, 2000, 40) if _key(x["name"]) not in used]
-            food = min(options, key=lambda x: (RANK.get(x.get("halal_level"), 3), bool(x.get("alcohol")), x["distance_m"]), default=None)
+            brands = {k for d in days for st in d["stops"] if st.get("kind") == "meal"
+                      for k in (_brand(st.get("name", "")), _key(st.get("name", "")))}
+            ok = lambda x: (_key(x["name"]) not in used and not _chain_in(x["name"], brands)
+                            and _open_at(x, day.get("date"), at) and not x.get("closed_for_good"))
+            # where halal food is rare (Tokyo), a little farther is better than no meal
+            options = [x for x in trip.near("halal", *here, 2000, 40) if ok(x)] or [x for x in trip.near("halal", *here, 3500, 40) if ok(x)]
+            food = min(options, key=lambda x: _meal_score(x, cc), default=None)
             if food:
+                if lo >= 18 * 60:  # dinner, not an afternoon snack that leaves no room for it
+                    day["stops"] = [st for st in day["stops"] if not (st.get("kind") == "meal"
+                                    and 14 * 60 + 30 < (_mins(st.get("time", "")) or 0) < at and at - (_mins(st["time"]) or 0) < MEAL_GAP)]
                 day["stops"].append(_fill_stop({"time": _hhmm(at), "kind": "meal", "ref": food["ref"], "added_by": "rihla",
-                                                "why": f"A halal {label} close to your other stops."}, food))
+                                                "why": ""}, food))
                 used.add(_key(food["name"]))
         # long empty stretches between 09:00 and 20:00
+        sunset = _sunset(day)
         for _ in range(4):
-            if sum(1 for st in day["stops"] if st.get("kind") == "sight") >= target:
+            have_sights = sum(1 for st in day["stops"] if st.get("kind") == "sight")
+            if have_sights >= target + 1:
                 break
             busy = sorted(((_mins(st.get("time", "")) or 0), (_mins(st.get("time", "")) or 0) + DURATION.get(st.get("kind"), 45))
                           for st in day["stops"])
@@ -1117,13 +1345,15 @@ def _fill_days(final: dict, trip: Trip) -> None:
                 if a - cursor >= 100:
                     gaps.append((a - cursor, cursor))
                 cursor = max(cursor, b)
-            if not gaps:
+            # below the target any empty stretch is filled; at the target only a long one (2.5 hours or more)
+            if not gaps or (have_sights >= target and max(gaps)[0] < 150):
                 break
             start = (max(gaps)[1] + 10 + 14) // 15 * 15
             here = _near_stop(day, start, home)
             seen = [(st["lat"], st["lon"]) for d in days for st in d["stops"] if st.get("kind") == "sight" and st.get("lat") is not None]
-            pool = [x for x in trip.near("sights", *here, 3000, 60) if _key(x["name"]) not in used and not x.get("halal_level")
+            pool = [x for x in trip.near("sights", *here, 3000, 60) if _key(x["name"]) not in used and _a_sight(x, trip)
                     and _open_at(x, day.get("date"), start)
+                    and not (sunset and _outdoor(x) and start + 60 > sunset)  # a park in daylight
                     # not part of a place already in the plan (the Imperial Council Hall is inside Topkapi Palace)
                     and all(osm.distance_m(x["lat"], x["lon"], a, b) > 300 for a, b in seen)]
             pick = min(pool, default=None, key=lambda x: x["distance_m"] - 900 * bool(x.get("topic")) - 700 * bool(x.get("popular"))
@@ -1145,53 +1375,64 @@ WALK = {False: (1.8, 0.075), True: (1.2, 0.06)}
 def _travel_min(a: dict, b: dict, kids: bool = False) -> int:
     """Minutes from stop a to stop b: on foot up to the walking limit, farther by metro or taxi (about 15 minutes
     to get going, then 3 minutes a km). Streets are about 30% longer than the straight line."""
-    if a.get("lat") is None or b.get("lat") is None:
+    if not a or not b or a.get("lat") is None or b.get("lat") is None:
         return 0
     km = osm.distance_m(a["lat"], a["lon"], b["lat"], b["lon"]) * 1.3 / 1000
     longest, pace = WALK[kids]
     return round(km / pace) if km <= longest else round(15 + 3 * km)
 
 
-def _untangle(final: dict, kids: bool = False) -> None:
+def _untangle(final: dict, kids: bool = False) -> int:
     """No two stops at the same time, and time to get from one to the next: each stop starts when the previous
-    one is over and the walk or ride is done. Prayers stay at their exact times; a visit or meal that would start
-    during a prayer, or less than half an hour before it, starts after it (from the mosque). A visit that would
-    now start too late (after 21:30, when the place is about to close, a park after sunset) or a meal right after another
-    meal is left out."""
+    one is over and the walk or ride is done. Prayers stay at their exact times; a visit or meal starts before a
+    prayer only if it has half an hour and the way to the mosque before it (for Jumu'ah, 15 minutes early) — then
+    it ends in time ("until"); otherwise it starts after the prayer, from the mosque. A visit that would now start
+    too late (after 21:30, when the place is about to close, a park after sunset) or a meal right after another
+    meal is left out. Returns how many stops were left out."""
+    left_out = 0
     for day in final.get("days", []):
         prayers = sorted((st for st in day["stops"] if st.get("kind") == "prayer"), key=lambda st: _mins(st.get("time", "")) or 0)
         others = sorted((st for st in day["stops"] if st.get("kind") != "prayer"), key=lambda st: _mins(st.get("time", "")) or 0)
         free, last, i, kept = 0, None, 0, []  # when and where the traveller is free again; the next prayer
-        sunset = _mins((day.get("prayer_times") or {}).get("Maghrib", "")) or \
-            next((_mins(p.get("time", "")) for p in prayers if p.get("prayer") == "Maghrib"), None)
+        sunset = _sunset(day)
         ate, dropped = None, []  # when the last meal started; stops left out
         for st in others:
             want = _mins(st.get("time", "")) or 0
+            st.pop("until", None)
             while True:
                 t = max(want, free + (_travel_min(last, st, kids) if last else 0))
                 p = prayers[i] if i < len(prayers) else None
-                start = (_mins(p.get("time", "")) or 0) if p else None
-                if p is None or t + MIN_STAY <= start:
+                if p is None:
                     break
-                free, last, i = max(free, start + (45 if p.get("jumuah") else DURATION["prayer"])), p, i + 1
+                start = (_mins(p.get("time", "")) or 0) - (JUMUAH_EARLY if p.get("jumuah") else 0)
+                if t + MIN_STAY + _travel_min(st, p, kids) <= start:
+                    break
+                free, last, i = max(free, start + (45 + JUMUAH_EARLY if p.get("jumuah") else DURATION["prayer"])), p, i + 1
             closes = _mins((st.get("open_today") or "").split("–")[-1])
-            words = " ".join([st.get("name") or ""] + list(st.get("categories") or []))
-            outdoor = (st.get("place_kind") == "park" or OUTDOOR.search(words)) and not INDOOR.search(words)
+            must = st.get("requested")
             if t > LATEST or (st.get("kind") == "sight" and closes and t >= closes - 45) \
-                    or (st.get("kind") == "sight" and outdoor and sunset and t >= sunset) \
+                    or (st.get("kind") == "sight" and not must and _outdoor(st) and sunset and t >= sunset) \
                     or (st.get("kind") == "meal" and ate is not None and t - ate < MEAL_GAP):
                 dropped.append(st.get("name") or "")
                 continue  # too late, closing, dark outside, or just after another meal
             if st.get("kind") == "meal":
                 ate = t
             if t != want:
-                st["time"] = _hhmm((t + 4) // 5 * 5)
+                t = (t + 4) // 5 * 5
+                st["time"] = _hhmm(t)
+            # it ends in time for the next prayer (and the way to the mosque), and before the place closes
+            end = t + DURATION.get(st.get("kind"), 45)
+            if p is not None:
+                end = min(end, start - _travel_min(st, p, kids))
+            if st.get("kind") == "sight" and closes:
+                end = min(end, closes)
+            if end < t + DURATION.get(st.get("kind"), 45):
+                st["until"] = _hhmm(end)
             kept.append(st)
-            free, last = (_mins(st["time"]) or t) + DURATION.get(st.get("kind"), 45), st
-        for st in kept:  # "a short walk from <a stop that was left out>"
-            if any(n and n in (st.get("why") or "") for n in dropped):
-                st["why"] = "A halal option close to your previous stop." if st.get("kind") == "meal" else _why(st)
+            free, last = end, st
+        left_out += len(dropped)
         day["stops"] = sorted(kept + prayers, key=lambda st: (_mins(st.get("time", "")) or 0, st.get("kind") != "prayer"))
+    return left_out
 
 
 def _path_m(points: list[tuple[float, float]]) -> float:
@@ -1219,37 +1460,55 @@ def _route(final: dict) -> None:
             day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
 
 
-async def _meals_nearby(final: dict, trip: Trip) -> None:
-    """Eat near where you are: a meal more than 2 km from the previous stop is swapped for an equally sure
-    halal option within 1.2 km of it (the model tends to pick restaurants from the city centre)."""
-    used = {_key(st.get("name", "")) for d in final.get("days", []) for st in d["stops"] if st.get("kind") != "prayer"}
-    for day in final.get("days", []):
-        for i, st in enumerate(day["stops"]):
+async def _check_meals(final: dict, trip: Trip) -> int:
+    """Eat near where you are, while the restaurant is open: a meal more than 1.5 km from where the traveller is
+    just before it (a mosque counts) or closed at that time is swapped for the best open halal option near there
+    (or waits for the opening, if that is soon). Returns how many meals had to be left out."""
+    cc = trip.dest.get("country_code", "")
+    removed = 0
+    days = final.get("days", [])
+    used = {k for d in days for st in d["stops"] if st.get("kind") != "prayer" for k in [_key(st.get("name", ""))] if k}
+    used |= {_brand(st.get("name", "")) for d in days for st in d["stops"] if st.get("kind") == "meal"}
+    seen_brands: set[str] = set()
+    for day in days:
+        for i, st in enumerate(list(day["stops"])):
             if st.get("kind") != "meal" or st.get("lat") is None:
                 continue
-            before = [x for x in day["stops"][:i][::-1] if x.get("kind") != "prayer" and x.get("lat") is not None]
-            if not before:
-                continue
-            here = (before[0]["lat"], before[0]["lon"])
-            if osm.distance_m(*here, st["lat"], st["lon"]) <= 2000:
+            t = _mins(st.get("time", "")) or 0
+            hours = _opening(trip.places.get(st.get("ref"), {}), day.get("date"))
+            if hours and t < hours[0] <= t + 60:  # opens soon: eat a little later
+                t = (hours[0] + 4) // 5 * 5
+                st["time"] = _hhmm(t)
+            before = [x for x in day["stops"][:day["stops"].index(st)][::-1] if x.get("lat") is not None]
+            here = (before[0]["lat"], before[0]["lon"]) if before else (st["lat"], st["lon"])
+            far = bool(before) and osm.distance_m(*here, st["lat"], st["lon"]) > 1500
+            closed = not _open_at(trip.places.get(st.get("ref"), {}), day.get("date"), t)
+            # a family meal at a place with a bar: an equally sure place without alcohol nearby is better
+            drinks = bool(st.get("alcohol"))
+            twice = _chain_in(st.get("name", ""), seen_brands)  # another branch of a chain already in the trip
+            seen_brands |= {_brand(st.get("name", "")), _key(st.get("name", ""))}
+            if not far and not closed and not drinks and not twice:
                 continue
             rank = RANK.get(st.get("halal_level"), 3)
+            reach = 800 if (drinks or twice) and not far and not closed else 1500
+
             def options():
-                return [x for x in trip.near("halal", *here, 1500, 30)
-                        if _key(x["name"]) not in used and RANK.get(x.get("halal_level"), 3) <= rank]
-            if not options():  # nothing looked up around here yet: ask Qloo and OpenStreetMap
+                return [x for x in trip.near("halal", *here, reach, 40) if _key(x["name"]) not in used and x["ref"] != st.get("ref")
+                        and not _chain_in(x["name"], used | seen_brands) and RANK.get(x.get("halal_level"), 3) <= rank
+                        and _open_at(x, day.get("date"), t) and not x.get("closed_for_good") and not (drinks and x.get("alcohol"))]
+            if not options() and (far or closed):  # nothing looked up around here yet: ask Qloo and OpenStreetMap
                 await _safe_tool(trip, "halal_food_near", {"lat": here[0], "lon": here[1], "radius_m": 1200})
-            food = min(options(), key=lambda x: (RANK.get(x.get("halal_level"), 3), bool(x.get("alcohol")), x["distance_m"]), default=None)
+            food = min(options(), key=lambda x: _meal_score(x, cc), default=None)
             if food:
                 used.discard(_key(st.get("name", "")))
                 keep = {k: st[k] for k in ("time", "kind") if k in st}
                 st.clear()
-                st.update(_fill_stop(dict(keep, ref=food["ref"], added_by="rihla",
-                                          why=f"A halal meal a short walk from {before[0].get('name', 'your previous stop')}."), food))
+                st.update(_fill_stop(dict(keep, ref=food["ref"], added_by="rihla", why=""), food))
                 used.add(_key(food["name"]))
-
-
-MEAL_GAP = 150  # minutes between two meals: lunch, an afternoon coffee or sweet, dinner
+            elif closed:
+                day["stops"].remove(st)  # closed then and nothing else open nearby: the day is filled again
+                removed += 1
+    return removed
 
 
 def _space_meals(final: dict) -> None:
@@ -1267,96 +1526,231 @@ def _space_meals(final: dict) -> None:
             last, n = t, n + 1
 
 
-def _polish(final: dict, trip: Trip) -> None:
-    """Fix what the model tends to get wrong: places that match what the traveller said they love must be in
-    the plan (e.g. the Natural History Museum for kids who love dinosaurs), and a 'why' that describes a
-    different place is replaced by the place's own description."""
+def _add_musts(final: dict, trip: Trip) -> None:
+    """Places they asked for, and places known for what they said they love (the Natural History Museum for kids
+    who love dinosaurs), must be in the plan — on a day when they are open, instead of a weaker stop."""
     days = final.get("days", [])
     if not days:
         return
     in_plan = {_key(st.get("name", "")) for d in days for st in d["stops"]}
-    words = lambda x: {_singular(w) for k in x.get("topic") or [] for w in re.findall(r"[a-z]{4,}", k.lower())} & trip.topics
+    words = lambda x: {w for k in x.get("topic") or [] for w in _words(k)}
     musts = sorted((x for x in trip.places.values() if (x.get("topic") or x.get("requested")) and x.get("source") == "qloo"
-                    and not x.get("halal_level") and x.get("kind") != "mosque" and x.get("lat") is not None),
+                    and _a_sight(x, trip) and x.get("lat") is not None),
                    key=lambda x: (not x.get("requested"), not x.get("popular"), x.get("distance_m") or 0))
     done = set().union(*[words(x) for x in musts if _key(x["name"]) in in_plan]) if musts else set()
     done |= {w for d in days for st in d["stops"] for w in words(st)}
     added = 0
     for x in musts:
-        if added < 3 and _key(x["name"]) not in in_plan and (x.get("requested") or not words(x) <= done):
-            day = min(days, key=lambda d: osm.distance_m(*_centre(d, (trip.dest["lat"], trip.dest["lon"])), x["lat"], x["lon"]))
-            weak = [st for st in day["stops"] if st.get("kind") == "sight" and not st.get("topic") and not st.get("requested")]
-            weak.sort(key=lambda st: (bool(st.get("because")), bool(st.get("popular"))))
-            new = _fill_stop({"time": weak[0]["time"] if weak else "10:00", "kind": "sight", "ref": x["ref"], "why": _why(x),
-                              "added_by": "rihla"}, x)
-            if weak:
-                day["stops"][day["stops"].index(weak[0])] = new
-            else:
-                day["stops"].append(new)
-            day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
-            in_plan.add(_key(x["name"]))
-            done |= words(x)
-            added += 1
+        if _key(x["name"]) in in_plan or not (x.get("requested") or (added < 3 and not words(x) <= done)):
+            continue
+        home = (trip.dest["lat"], trip.dest["lon"])
+        open_days = [d for d in days if _opening(x, d.get("date")) is not False]
+        if not open_days:
+            continue
+        day = min(open_days, key=lambda d: osm.distance_m(*_centre(d, home), x["lat"], x["lon"]))
+        # instead of the weakest visit of that day (never one they asked for, a topic or a famous highlight)
+        weak = [st for st in day["stops"] if st.get("kind") == "sight" and not st.get("topic") and not st.get("requested")
+                and not st.get("popular")]
+        weak.sort(key=lambda st: (bool(st.get("because")), st.get("added_by") != "rihla"))
+        h = _opening(x, day.get("date"))
+        t = _mins(weak[0]["time"]) if weak else 10 * 60
+        if h and not (h[0] <= t <= h[1] - 75):
+            t = (h[0] + 14) // 15 * 15
+        new = _fill_stop({"time": _hhmm(t), "kind": "sight", "ref": x["ref"], "why": _why(x), "added_by": "rihla"}, x)
+        if weak:
+            day["stops"][day["stops"].index(weak[0])] = new
+        else:
+            day["stops"].append(new)
+        day["stops"].sort(key=lambda st: _mins(st.get("time", "")) or 0)
+        in_plan.add(_key(x["name"]))
+        done |= words(x)
+        added += 0 if x.get("requested") else 1
+
+
+async def _pick_mosques(final: dict, trip: Trip) -> None:
+    """Pray on the way: for each prayer the mosque that adds the least walking between the stop before and the stop
+    after (the model tends to reuse one mosque all day, or one near a stop that is no longer there). Where no mosque
+    is known within 1.5 km of the stop before, Rihla asks Qloo and OpenStreetMap about that spot first."""
+    for d in final.get("days", []):
+        for i, st in enumerate(d["stops"]):
+            if st.get("kind") != "prayer" or st.get("jumuah") or trip.lookups_left <= 0:
+                continue
+            prev = next((x for x in d["stops"][:i][::-1] if x.get("kind") != "prayer" and x.get("lat") is not None), None)
+            if prev and not trip.near("mosques", prev["lat"], prev["lon"], 1500, 1):
+                trip.lookups_left -= 1
+                await _safe_tool(trip, "mosques_near", {"lat": prev["lat"], "lon": prev["lon"]})
+    _choose_mosques(final, trip)
+
+
+def _choose_mosques(final: dict, trip: Trip) -> None:
+    for d in final.get("days", []):
+        stops = d["stops"]
+        for i, st in enumerate(stops):
+            if st.get("kind") != "prayer" or st.get("jumuah"):
+                continue
+            prev = next((x for x in stops[:i][::-1] if x.get("kind") != "prayer" and x.get("lat") is not None), None)
+            nxt = next((x for x in stops[i + 1:] if x.get("kind") != "prayer" and x.get("lat") is not None), None)
+            anchor = prev or nxt
+            if anchor is None:
+                continue
+
+            def cost(m: dict) -> float:
+                way = osm.distance_m(anchor["lat"], anchor["lon"], m["lat"], m["lon"])
+                if prev and nxt:
+                    # half weight: where you are now matters most; the meal after can move closer to the mosque
+                    way += 0.5 * osm.distance_m(m["lat"], m["lon"], nxt["lat"], nxt["lon"])
+                return way + 400 * bool(m.get("unnamed")) - 250 * (m.get("source") == "qloo") \
+                    + 600 * bool(LODGING_NAME.search(m.get("name") or ""))
+            best = min(trip.near("mosques", anchor["lat"], anchor["lon"], 6000, 20), key=cost, default=None)
+            if best is None or best["ref"] == st.get("ref"):
+                continue
+            if st.get("lat") is None or cost(best) < cost(st) - 300:
+                keep = {k: st[k] for k in ("time", "kind", "prayer", "added_by") if k in st}
+                st.clear()
+                st.update(_fill_stop(dict(keep, ref=best["ref"], why=""), best))
+
+
+async def _food_near_meals(final: dict, trip: Trip) -> None:
+    """Halal food is rare in some cities (Tokyo): before lunch and dinner are added, make sure Rihla has looked for
+    it around where the traveller will be at those times (at most two extra lookups a plan)."""
+    home = (trip.dest["lat"], trip.dest["lon"])
+    for day in final.get("days", []):
+        for at in (12 * 60 + 30, (_mins((day.get("prayer_times") or {}).get("Maghrib", "")) or 18 * 60) + 25):
+            here = _near_stop(day, at, home)
+            if trip.lookups_left > 0 and not trip.near("halal", *here, 2000, 1):
+                trip.lookups_left -= 1
+                await _safe_tool(trip, "halal_food_near", {"lat": here[0], "lon": here[1], "radius_m": 1500})
+
+
+async def _finish(final: dict, trip: Trip) -> None:
+    """Everything the code checks after the model, in an order that settles: places they must see, opening hours,
+    then rounds of filling empty time, routing, meals near where you are, mosques on the way and realistic times —
+    until no stop has to be left out."""
+    _add_musts(final, trip)
     _check_hours(final, trip)
     _space_meals(final)
-    _fill_days(final, trip)
-    _check_hours(final, trip, drop=False)
-    # pray at the mosque nearest to where the family is at that time (the model tends to reuse one mosque all day)
-    for d in days:
-        for i, st in enumerate(d["stops"]):
-            if st.get("kind") != "prayer":
-                continue
-            around = [x for x in d["stops"][i - 1::-1] + d["stops"][i + 1:] if x.get("kind") != "prayer" and x.get("lat") is not None] if i else                 [x for x in d["stops"][1:] if x.get("kind") != "prayer" and x.get("lat") is not None]
-            if not around or st.get("lat") is None:
-                continue
-            here = (around[0]["lat"], around[0]["lon"])
-            best = min(trip.near("mosques", *here, 6000, 12), default=None,
-                       key=lambda m: m["distance_m"] - (400 if m.get("source") == "qloo" else 0))
-            if best and best["ref"] != st.get("ref") and                     osm.distance_m(*here, st["lat"], st["lon"]) - best["distance_m"] > 600:
-                keep = {k: st[k] for k in ("time", "kind", "prayer") if k in st}
-                st.clear()
-                st.update(_fill_stop(dict(keep, ref=best["ref"], why=f"{keep.get('prayer', 'Prayer')} at the mosque nearest to "
-                                                                       f"{around[0].get('name', 'your previous stop')}."), best))
-    _jumuah(final, trip)
-    # a "why" that names another place (the model mixed two stops up) is replaced by the facts we have
-    names = {_key(x.get("name", "")) for x in trip.places.values() if len(x.get("name", "")) >= 8}
-    for d in days:
-        for st in d["stops"]:
+    for _ in range(3):
+        await _food_near_meals(final, trip)
+        _fill_days(final, trip)
+        _check_hours(final, trip, drop=False)
+        _route(final)
+        meals_left_out = await _check_meals(final, trip)
+        await _pick_mosques(final, trip)
+        _jumuah(final, trip)
+        if not _untangle(final, trip.kids) and not meals_left_out:
+            break
+        _add_musts(final, trip)  # one they asked for may have been left out for its time: on another slot
+        _check_hours(final, trip)
+    else:  # still settling after three rounds: the last word is realistic times
+        await _pick_mosques(final, trip)
+        _jumuah(final, trip)
+        _untangle(final, trip.kids)
+    _texts(final, trip)
+
+
+# what the model must not claim about a restaurant (the halal label in the app says it honestly)
+CLAIMS = re.compile(r"halal|helal|حلال|халал|alcohol|alkol|alcool|كحول|алкохол|certif|verified|doğrulan", re.I)
+
+
+def _no_claims(text: str) -> str:
+    """The sentences of a meal's text that do not say whether it is halal or serves alcohol."""
+    parts = re.split(r"(?<=[.!?。])\s+", (text or "").strip())
+    return " ".join(p for p in parts if p and not CLAIMS.search(p)).strip()
+
+
+def _texts(final: dict, trip: Trip) -> None:
+    """Texts that match the final plan: every prayer says where you come from and go next; a meal the code chose
+    says where it is; no text names a place that is not in that day; no meal text claims halal or no alcohol."""
+    names = {k for x in trip.places.values() for k in [_key(x.get("name", ""))] if len(k) >= 8}
+    for d in final.get("days", []):
+        stops = d["stops"]
+        here = {_key(x.get("name", "")) for x in stops}
+        for i, st in enumerate(stops):
+            prev = next((x for x in stops[:i][::-1] if x.get("kind") != "prayer" and x.get("name")), None)
+            nxt = next((x for x in stops[i + 1:] if x.get("kind") != "prayer" and x.get("name")), None)
             why, own = _key(st.get("why", "")), _key(st.get("name", ""))
-            mixed = own and own not in why and any(n != own and n not in own and why.startswith(n) for n in names)
-            if st.get("kind") != "prayer" and (mixed or re.search(r"\bfans?\b", why)):
-                st["why"] = _why(trip.places.get(st.get("ref"), st))
+            stale = any(n != own and n not in own and n not in here and n in why for n in names)
+            if st.get("kind") == "prayer":
+                if st.get("jumuah"):
+                    st["why"] = JUMUAH_WHY
+                elif prev and nxt:
+                    st["why"] = f"{st.get('prayer', 'Prayer')} on the way from {prev['name']} to {nxt['name']}."
+                elif prev or nxt:
+                    st["why"] = f"{st.get('prayer', 'Prayer')} at the mosque nearest to {(prev or nxt)['name']}."
+            elif st.get("kind") == "meal":
+                text = _no_claims(st.get("why", ""))
+                if st.get("added_by") == "rihla" or not text or stale:
+                    t = _mins(st.get("time", "")) or 0
+                    label = "Lunch" if t < 15 * 60 + 30 else "Dinner" if t >= 17 * 60 + 30 else "A break"
+                    near = prev and osm.distance_m(prev["lat"], prev["lon"], st["lat"], st["lon"]) <= 1200
+                    food = f" {st['cuisine'].split(',')[0].strip().capitalize()} food." if st.get("cuisine") else ""
+                    text = (f"{label} a short walk from {prev['name']}." if near else
+                            f"{label} close to your stops this {'afternoon' if label != 'Dinner' else 'evening'}.") + food
+                st["why"] = text
+            elif stale or not st.get("why"):
+                st["why"] = _why(trip.places.get(st.get("ref"), st) | {"requested": st.get("requested"), "topic": st.get("topic")})
 
 
 NEARBY_FIELDS = ("name", "lat", "lon", "halal_level", "halal_reason", "alcohol", "cuisine", "because", "kids_ok", "popular",
-                 "topic", "source", "categories", "rating")
+                 "topic", "source", "categories", "rating", "unnamed")
 NEARBY_MAX = {"halal": 60, "mosques": 40, "sights": 40}
 
 
 def _nearby(final: dict, trip: Trip) -> dict:
     """Places the tools found that the plan does not use, for the phone on the day of the trip ("Today" mode):
-    halal food, mosques and sights near wherever the traveller is — no new Qloo requests, works offline."""
+    halal food, mosques and sights near wherever the traveller is — no new Qloo requests, works offline.
+    One entry per chain, no hotels or shops among the sights, nothing built around alcohol."""
     used = {s.get("ref") for d in final.get("days", []) for s in d.get("stops", [])}
+    used_names = {_key(s.get("name", "")) for d in final.get("days", []) for s in d.get("stops", []) if s.get("kind") != "prayer"}
     order = {
-        "halal": lambda p: (RANK.get(p.get("halal_level"), 3), bool(p.get("alcohol")), -(p.get("affinity") or 0)),
-        "mosques": lambda p: (p.get("source") != "qloo",),
+        "halal": lambda p: (bool(p.get("alcohol")), RANK.get(p.get("halal_level"), 3), bool(CHAINS.search(p.get("name") or "")),
+                            -(p.get("affinity") or 0)),
+        "mosques": lambda p: (bool(p.get("unnamed")), p.get("source") != "qloo"),
         "sights": lambda p: (-bool(p.get("topic")) - bool(p.get("because")) - bool(p.get("popular")), -(p.get("affinity") or 0)),
     }
     out = {}
     for kind, pool in trip.pool.items():
         items = [p for ref, p in pool.items() if ref not in used and p.get("lat") is not None and p.get("name")
-                 and (kind != "sights" or not (p.get("halal_level") or re.search(
-                     r"restaurant|agency|operator|rental", " ".join(p.get("categories") or [])[:200], re.I)))]
+                 and not p.get("closed_for_good") and not qloo.is_alcohol_venue(p) and len(_key(p["name"])) >= 2
+                 and (kind == "mosques" or _key(p["name"]) not in used_names)
+                 and (kind != "sights" or (_a_sight(p, trip) and not p.get("alcohol")))]
         items.sort(key=order[kind])
-        rows = []
-        for p in items[:NEARBY_MAX[kind]]:
+        rows, seen = [], set()
+        for p in items:
+            k = _key(p["name"])
+            if kind != "mosques" and k in seen:
+                continue  # one branch of a chain is enough
+            seen.add(k)
             row = {k: p[k] for k in NEARBY_FIELDS if p.get(k) not in (None, "", [], False)}
             row["lat"], row["lon"] = round(p["lat"], 5), round(p["lon"], 5)
             if row.get("categories"):
                 row["categories"] = row["categories"][:1]
             rows.append(row)
+            if len(rows) >= NEARBY_MAX[kind]:
+                break
         out[kind] = rows
     return out
+
+
+def _brand(name: str) -> str:
+    """A restaurant chain without the branch: "Pizza Pilgrims London Bridge" -> "pizza pilgrims"."""
+    words = _key(name).split()
+    return " ".join(words[:2]) if len(words) >= 3 else " ".join(words)
+
+
+def _chain_in(name: str, brands: set[str]) -> bool:
+    """Is this restaurant a branch of one already in the trip? Same brand, or one name starts with the other
+    ("Hiba" / "Hiba Express")."""
+    k, b = _key(name), _brand(name)
+    return bool(k) and any(x and (x == b or k.startswith(x + " ") or x.startswith(k + " ") or x == k) for x in brands)
+
+
+def _twin(a: dict, b: dict) -> bool:
+    """Two branches of one institution in a trip ("Salt Galata" and "Salt Beyoğlu"): same first word, two-word
+    names, same kind of place."""
+    ka, kb = _key(a.get("name", "")).split(), _key(b.get("name", "")).split()
+    return len(ka) == len(kb) == 2 and ka[0] == kb[0] and len(ka[0]) >= 4 and \
+        (a.get("categories") or [""])[:1] == (b.get("categories") or [""])[:1]
 
 
 async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
@@ -1365,6 +1759,7 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     used: set[str] = set()
     used_names: set[str] = set()
     used_points: list[tuple[float, float]] = []  # the same museum can exist twice in the data under two names
+    sights: list[dict] = []
     for i, day in enumerate(final.get("days", [])):
         day["day"] = i + 1  # whatever the model numbered it
         for s in day.get("stops", []):
@@ -1378,19 +1773,21 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
             p = trip.places.get(s.get("ref", ""))
             want = s.get("kind")
             is_food = bool(p and p.get("halal_level"))
-            is_mosque = bool(p and p.get("kind") == "mosque")
+            is_mosque = bool(p and p.get("kind") == "mosque" or p and re.search(r"\bmosque\b", " ".join(p.get("categories") or [])))
             # the model sometimes files a sight under "meal" or a cafe under "prayer": fix it from the data
             if want == "prayer" and not is_mosque:
-                p = next(iter(trip.near("mosques", *last, 6000, 1)), None)
-                if p:
-                    s["why"] = ""
+                p = min(trip.near("mosques", *last, 6000, 15), key=_mosque_score, default=None)
+                s["why"] = ""
             elif want == "meal" and not is_food:
                 options = [x for x in trip.near("halal", *last, 2500, 30) if x["ref"] not in used and _key(x["name"]) not in used_names]
-                p = min(options, key=lambda x: (RANK.get(x.get("halal_level"), 3), x["distance_m"]), default=None)
-                if p:
-                    s["why"] = "A halal option close to your previous stop."
-            elif want == "sight" and (is_food or is_mosque):
-                s["kind"] = "meal" if is_food else "prayer"
+                p = min(options, key=lambda x: _meal_score(x, trip.dest.get("country_code", "")), default=None)
+                s["why"], s["added_by"] = "", "rihla"
+            elif want == "sight" and is_food:
+                s["kind"] = "meal"
+            elif want == "sight" and is_mosque and not _a_sight(p, trip):
+                s["kind"] = "prayer"  # a famous mosque (the Blue Mosque) stays a visit; a small one is for praying
+            elif want == "sight" and p is not None and not is_mosque and _not_a_sight(p, trip):
+                continue  # a hotel or a shop the model picked as a sight
             if p:
                 s["ref"] = p.get("ref", s.get("ref"))
             if s.get("kind") == "prayer" and day.get("prayer_times"):
@@ -1400,38 +1797,33 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
                     continue  # one stop per prayer (the model sometimes lists two mosques for Dhuhr)
                 prayed.add(name)
                 s["time"], s["prayer"] = day["prayer_times"][name], name
-                if not s.get("why") or "prayer" not in s["why"].lower():
-                    s["why"] = f"{name} prayer at the mosque closest to your previous stop."
             if not p:
                 continue
             if s.get("kind") not in ("sight", "meal", "prayer", "rest"):
                 s["kind"] = "prayer" if p.get("kind") == "mosque" else "meal" if p.get("halal_level") else "sight"
             twin = s["kind"] == "sight" and p.get("lat") is not None and \
-                any(osm.distance_m(p["lat"], p["lon"], a, b) < 80 for a, b in used_points)
+                (any(osm.distance_m(p["lat"], p["lon"], a, b) < 80 for a, b in used_points) or any(_twin(p, x) for x in sights))
             if s["kind"] != "prayer" and (s.get("ref") in used or _key(p.get("name", "")) in used_names or twin):
                 # never the same sight or restaurant twice in one trip (not even another branch of a chain)
                 if s["kind"] != "meal":
                     continue
                 options = [x for x in trip.near("halal", *last, 2500, 30) if x["ref"] not in used and _key(x["name"]) not in used_names]
-                p = min(options, key=lambda x: (RANK.get(x.get("halal_level"), 3), x["distance_m"]), default=None)
+                p = min(options, key=lambda x: _meal_score(x, trip.dest.get("country_code", "")), default=None)
                 if not p:
                     continue
-                s["ref"], s["why"] = p["ref"], "A halal option close to your previous stop."
+                s["ref"], s["why"], s["added_by"] = p["ref"], "", "rihla"
             used.add(s.get("ref"))
             if s["kind"] != "prayer":
                 used_names.add(_key(p.get("name", "")))
             if s["kind"] == "sight" and p.get("lat") is not None:
                 used_points.append((p["lat"], p["lon"]))
+                sights.append(p)
             _fill_stop(s, p)
             if p.get("lat"):
                 last = (p["lat"], p["lon"])
             stops.append(s)
         day["stops"] = sorted(stops, key=lambda x: _mins(x.get("time", "")) or 0)
-    _polish(final, trip)
-    _route(final)
-    _check_hours(final, trip, drop=False)
-    await _meals_nearby(final, trip)
-    _untangle(final, trip.kids)
+    await _finish(final, trip)
     final["nearby"] = _nearby(final, trip)
     final["destination"] = trip.dest
     final["timezone"] = next((p["timezone"] for p in prayers if p.get("timezone")), "")  # the plan's times are local there
@@ -1445,3 +1837,96 @@ async def _enrich(final: dict, trip: Trip, prayers: list[dict]) -> dict:
     final["model"] = trip.model
     final["llm_log"] = getattr(trip, "llm_log", [])
     return final
+
+
+EDIT = """You are the editor of a finished family travel plan. The stops are final: code has checked every place, time,
+prayer and meal. Write in {language}. Answer with ONE JSON object and nothing else:
+{"title": "...", "summary": "...", "themes": ["one per day"], "tips": ["..."], "why": {"<stop id>": "..."}}
+- title: short, fits these stops. summary: two sentences — who the trip is for and what it covers; name at most two or
+  three highlights (never list every stop, mosque or restaurant) and only places that are in the stops.
+- themes: one short theme per day that fits that day's stops (not places from other days).
+- tips: up to 4 practical tips, taken from the draft tips; leave out any tip that names a place not in the stops.
+- why: {why_rule}
+Rules: use only the facts given; never invent exhibits, links or reasons; never say whether a restaurant is halal,
+certified or serves alcohol (the app shows an honest label); do not mention fans or taste data."""
+
+
+async def _edit_texts(plan: dict, trip: Trip, llm: "LLM", travellers: str, tastes: str) -> None:
+    """One short call to the model after the code checks: the title, summary, day themes and tips are rewritten to
+    match the final stops (the model wrote them before code moved, added or left out places), and in a plan in
+    another language the texts the code wrote are translated. If the model is slow or down, the plan stays as it is."""
+    if llm.left() < 30 or not plan.get("days"):
+        return
+    english = trip.language.lower().startswith("english")
+    days, ids = [], {}
+    for d in plan["days"]:
+        rows = []
+        for j, st in enumerate(d["stops"]):
+            sid = f"{d['day']}-{j + 1}"
+            ids[sid] = st
+            row = {"id": sid, "time": st.get("time"), "kind": st.get("kind"), "name": st.get("name")}
+            for k, v in (("prayer", st.get("prayer")), ("jumuah", st.get("jumuah")), ("categories", (st.get("categories") or [])[:2]),
+                         ("about", _short(st.get("description", ""), 160)), ("known_for", st.get("topic")),
+                         ("you_asked_for_it", st.get("requested")), ("cuisine", st.get("cuisine"))):
+                if v:
+                    row[k] = v
+            if not english:
+                row["draft"] = st.get("why", "")
+            rows.append(row)
+        days.append({"day": d["day"], "date": d.get("date"), "draft_theme": d.get("theme", ""), "stops": rows})
+    why_rule = ("{} (an empty object)" if english else
+                "for EVERY stop id, one short sentence in {language}: translate the draft if it is right, otherwise write "
+                "it from the facts given")
+    prompt = EDIT.replace("{why_rule}", why_rule).replace("{language}", trip.language)
+    data = {"travellers": travellers, "tastes": tastes, "draft_title": plan.get("title", ""),
+            "draft_summary": plan.get("summary", ""), "draft_tips": plan.get("tips", []), "days": days}
+    try:
+        r = await llm.chat(messages=[{"role": "system", "content": prompt},
+                                     {"role": "user", "content": json.dumps(data, ensure_ascii=False)}],
+                           temperature=0.2, max_tokens=3500 if not english else 900, response_format={"type": "json_object"})
+    except Exception:
+        return
+    out = _json(r.choices[0].message.content or "")
+    if not isinstance(out, dict):
+        return
+    text = lambda v, n: v.strip() if isinstance(v, str) and 3 <= len(v.strip()) <= n else None
+    if text(out.get("title"), 120):
+        plan["title"] = text(out.get("title"), 120)
+    if text(out.get("summary"), 600):
+        plan["summary"] = text(out.get("summary"), 600)
+    themes = out.get("themes")
+    if isinstance(themes, list) and len(themes) == len(plan["days"]):
+        for d, th in zip(plan["days"], themes):
+            if text(th, 90):
+                d["theme"] = text(th, 90)
+    tips = out.get("tips")
+    if isinstance(tips, list):
+        plan["tips"] = [t.strip() for t in tips if text(t, 300)][:4] or plan.get("tips", [])
+    whys = out.get("why")
+    if not english and isinstance(whys, dict):
+        for sid, w in whys.items():
+            st = ids.get(str(sid))
+            w = text(w, 300)
+            if st is not None and w:
+                st["why"] = _no_claims(w) if st.get("kind") == "meal" else w
+                if not st["why"]:
+                    st["why"] = w if not CLAIMS.search(w) else st.get("why", "")
+    trip.trace.append({"tool": "edit_texts", "args": {}, "found": len(plan["days"]),
+                       "note": "title, day themes and texts matched to the final stops"})
+
+
+async def _wiki_photos(plan: dict) -> None:
+    """A photo for visits that have none (Qloo's photo links for some places no longer open): the Wikipedia
+    article about the place at the same spot, if there is one."""
+    todo = [st for d in plan.get("days", []) for st in d["stops"] if st.get("kind") == "sight" and not st.get("image")
+            and st.get("lat") is not None and st.get("name")]
+    if not todo:
+        return
+    try:
+        found = await asyncio.wait_for(asyncio.gather(*[wiki.photo(st["name"], st["lat"], st["lon"]) for st in todo],
+                                                      return_exceptions=True), 8)
+    except Exception:
+        return
+    for st, url in zip(todo, found):
+        if isinstance(url, str) and url:
+            st["image"] = url

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import math
+import re
 import time
 
 import httpx
@@ -43,17 +44,32 @@ async def geocode(place: str) -> dict | None:
         if wait > 0:
             await asyncio.sleep(wait)
         async with httpx.AsyncClient(headers=_HEADERS, timeout=20) as c:
-            r = await c.get(NOMINATIM, params={"q": place, "format": "jsonv2", "limit": 1, "addressdetails": 1})
+            r = await c.get(NOMINATIM, params={"q": place, "format": "jsonv2", "limit": 5, "addressdetails": 1,
+                                               "accept-language": "en"})
         _last_nominatim = time.time()
     r.raise_for_status()
-    rows = r.json()
+    x = best_match(r.json())
     out = None
-    if rows:
-        x = rows[0]
+    if x:
         out = {"name": x.get("display_name", place), "lat": float(x["lat"]), "lon": float(x["lon"]),
                "country_code": (x.get("address") or {}).get("country_code", "")}
     _cache[key] = (time.time(), out)
     return out
+
+
+SETTLEMENTS = ("city", "town", "village", "suburb", "quarter", "neighbourhood", "city_district", "borough")
+
+
+def best_match(rows: list[dict]) -> dict | None:
+    """The result people mean: the most important one ("Mecca" is Makkah, not a hamlet in Italy); among equally
+    important ones the town itself rather than its administrative area ("Dubai" is the city centre, not the middle
+    of the emirate's boundary 13 km away)."""
+    if not rows:
+        return None
+    top = max(float(x.get("importance") or 0) for x in rows)
+    tied = [x for x in rows if float(x.get("importance") or 0) >= top - 0.005]
+    return min(tied, key=lambda x: (x.get("category") != "place" or x.get("type") not in SETTLEMENTS,
+                                    x.get("addresstype") not in SETTLEMENTS[:3]))
 
 
 async def _overpass(query: str) -> list[dict]:
@@ -77,9 +93,14 @@ def _place(el: dict, lat: float, lon: float) -> dict:
     t = el.get("tags", {})
     plat = el.get("lat") or (el.get("center") or {}).get("lat")
     plon = el.get("lon") or (el.get("center") or {}).get("lon")
+    # many small mosques are mapped without a name, or only with a name in the local language
+    name = t.get("name:en") or t.get("name") or t.get("int_name") or t.get("official_name") or \
+        next((v for k, v in sorted(t.items()) if k.startswith("name:") and v), "")
+    mosque = t.get("religion") == "muslim" and t.get("amenity") == "place_of_worship"
     return {
         "osm_id": f"{el['type']}/{el['id']}",
-        "name": t.get("name:en") or t.get("name") or "",
+        "name": name or ("Mosque" if mosque else ""),
+        "unnamed": not name,
         "name_local": t.get("name", ""),
         "lat": plat, "lon": plon,
         "distance_m": round(distance_m(lat, lon, plat, plon)) if plat else None,
@@ -90,11 +111,28 @@ def _place(el: dict, lat: float, lon: float) -> dict:
         "opening_hours": t.get("opening_hours", ""),
         "kind": t.get("amenity") or t.get("shop") or t.get("leisure") or "",
         # a bar inside, or beer/wine on the menu: shown as "Serves alcohol"
-        "alcohol": t.get("bar") == "yes" or any(t.get(k) in ("yes", "served") for k in ("drink:beer", "drink:wine", "drink:spirits")),
+        "alcohol": t.get("bar") == "yes" or any(t.get(k) in ("yes", "served", "only")
+                                                for k in ("drink:alcohol", "drink:beer", "drink:wine", "drink:spirits")),
     }
 
 
 CACHE_DIR = CACHE / "osm"
+_SEED_NAME = re.compile(r"^v2_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)_(\d+)(_af)?\.json$")
+
+
+def _nearest_file(folder, lat: float, lon: float, radius_m: int, all_food: bool, within_m: int = 1500):
+    """A shipped area file of the same kind whose centre is within 1.5 km of this point."""
+    best = None
+    for f in folder.glob("v2_*.json") if folder.exists() else []:
+        m = _SEED_NAME.match(f.name)
+        if not m or int(m.group(3)) < radius_m or bool(m.group(4)) != all_food:
+            continue
+        d = distance_m(lat, lon, float(m.group(1)), float(m.group(2)))
+        if d <= within_m and (best is None or d < best[0]):
+            best = (d, f)
+    return best[1] if best else None
+
+
 EATERIES = ("restaurant", "fast_food", "cafe", "food_court")  # a halal-tagged mini-golf or butcher is not a meal
 
 
@@ -105,6 +143,8 @@ async def area(lat: float, lon: float, radius_m: int = 3000, all_food: bool = Fa
     if (hit := _cached("area:" + key)) is not None:
         return hit
     f, seed = CACHE_DIR / f"{key}.json", SEED / "osm" / f"{key}.json"
+    # an area fetched for a point a few hundred metres away covers this one too ("Istanbul" vs "Sultanahmet")
+    seed = seed if seed.exists() else _nearest_file(SEED / "osm", lat, lon, radius_m, all_food) or seed
     if f.exists() and time.time() - f.stat().st_mtime < 14 * 86400:
         data = json.loads(f.read_text(encoding="utf-8"))
     elif seed.exists():

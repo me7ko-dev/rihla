@@ -12,7 +12,8 @@ from app import agent, halal, main, qloo
 
 # ---------- halal confidence ----------
 @pytest.mark.parametrize("place, country, level", [
-    ({"halal": "yes"}, "gb", "verified"),                                       # tagged on OpenStreetMap
+    ({"halal": "only"}, "gb", "verified"),                                      # halal only on OpenStreetMap
+    ({"halal": "yes"}, "gb", "likely"),                                         # halal options on OpenStreetMap
     ({"qloo_halal": "listed"}, "us", "verified"),                               # a halal restaurant in Qloo
     ({"qloo_halal": "mentioned", "alcohol": True}, "gb", "unknown"),            # reviews say halal, but a full bar
     ({"name": "Kebab Palace"}, "tr", "likely"),                                 # Muslim-majority country
@@ -264,8 +265,10 @@ def test_tips_filed_inside_a_day_are_lifted():
 
 @pytest.mark.parametrize("tips, kept", [
     ("Buy a Museum Pass. Wear comfortable shoes.", ["Buy a Museum Pass. Wear comfortable shoes."]),  # one text, seen 04.10
-    ("Buy a Museum Pass\n- \nWear comfortable shoes", ["Buy a Museum Pass", "-", "Wear comfortable shoes"]),
-    ("Buy a Museum Pass; wear comfortable shoes", ["Buy a Museum Pass", "wear comfortable shoes"]),
+    ("Buy a Museum Pass\n- \nWear comfortable shoes", ["Buy a Museum Pass", "Wear comfortable shoes"]),  # no "-" tip
+    ("Buy a Museum Pass; Wear comfortable shoes", ["Buy a Museum Pass", "Wear comfortable shoes"]),
+    # one sentence with a clause after "; " stays whole (seen in Sarajevo, 11.10)
+    ("Wear comfortable shoes; many sites are close", ["Wear comfortable shoes; many sites are close"]),
     (None, []), (7, []),
 ])
 def test_tips_written_as_text(tips, kept):

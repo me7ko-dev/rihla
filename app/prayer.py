@@ -1,6 +1,7 @@
 """Prayer times from the free AlAdhan API (aladhan.com)."""
 import datetime as dt
 import time
+import unicodedata
 
 import httpx
 
@@ -13,6 +14,13 @@ PRAYERS = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"]
 METHOD = {"tr": 13, "sa": 4, "ae": 16, "eg": 5, "pk": 1, "in": 1, "ir": 7, "kw": 9, "qa": 10, "sg": 11,
           "fr": 12, "ru": 14, "my": 17, "tn": 18, "dz": 19, "id": 20, "ma": 21, "pt": 22, "jo": 23,
           "us": 2, "ca": 2, "gb": 15, "bg": 13}
+
+
+def month_name(name: str) -> str:
+    """"Jumādá al-ūlá" -> "Jumada al-Ula": the Hijri month the way an English reader writes it."""
+    plain = "".join(c for c in unicodedata.normalize("NFKD", name or "") if not unicodedata.combining(c))
+    plain = plain.replace("ʿ", "").replace("ʾ", "").replace("’", "").replace("'", "")
+    return " ".join("-".join(x if x == "al" else x[:1].upper() + x[1:] for x in w.split("-")) for w in plain.split())
 
 
 async def times(lat: float, lon: float, date: dt.date, country_code: str = "") -> dict:
@@ -30,7 +38,7 @@ async def times(lat: float, lon: float, date: dt.date, country_code: str = "") -
     h = d["date"]["hijri"]
     out = {
         "date": date.isoformat(),
-        "hijri": f'{h["day"]} {h["month"]["en"]} {h["year"]}',
+        "hijri": f'{h["day"]} {month_name(h["month"]["en"])} {h["year"]}',
         "timings": {p: d["timings"][p][:5] for p in PRAYERS} | {"Sunrise": d["timings"]["Sunrise"][:5]},
         "method": d.get("meta", {}).get("method", {}).get("name", ""),
         "timezone": d.get("meta", {}).get("timezone", ""),

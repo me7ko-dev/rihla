@@ -1,9 +1,9 @@
 """How sure can we be that a place serves halal food?
 
-verified - listed as halal: tagged diet:halal=yes|only on OpenStreetMap (or matched by name+distance to such
-           a place), or a Qloo place in the "halal restaurant" category
-likely   - diners mention halal there (Qloo tags), a Muslim-majority country, or a cuisine that is usually
-           halal (Turkish, Lebanese, Pakistani...)
+verified - listed as halal: diet:halal=only on OpenStreetMap (or matched by name+distance to such a place),
+           or a Qloo place in the "halal restaurant" category
+likely   - halal options marked on OpenStreetMap (diet:halal=yes), diners mention halal there (Qloo tags), a
+           Muslim-majority country, or a cuisine that is usually halal (Turkish, Lebanese, Pakistani...)
 unknown  - no signal; the traveller should ask
 We never claim more than the data supports.
 """
@@ -22,17 +22,28 @@ HALAL_CUISINES = ("turkish", "lebanese", "middle_eastern", "arab", "pakistani", 
 
 
 def _norm(name: str) -> str:
-    s = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
+    """A name for comparing: no accents, no case, no generic words; letters of every script are kept
+    ("Köşesi" -> "kosesi", "Халялко" stays "халялко" — it must not become empty)."""
+    s = unicodedata.normalize("NFKD", name or "")
+    s = "".join(c for c in s if not unicodedata.combining(c)).casefold().replace("ı", "i")
     s = re.sub(r"\b(restaurant|restoran|cafe|kebab house|grill|the)\b", " ", s)
-    return re.sub(r"[^a-z0-9]+", " ", s).strip()
+    return re.sub(r"[\W_]+", " ", s).strip()
 
 
 def level(place: dict, country_code: str = "") -> tuple[str, str]:
     """(level, reason) for an OSM or Qloo place dict."""
-    if place.get("halal") in ("yes", "only"):
-        return "verified", "Tagged halal on OpenStreetMap" + (" (halal only)" if place.get("halal") == "only" else "")
+    # OpenStreetMap: diet:halal=only is a halal restaurant; =yes means halal options are available, not everything.
+    # A "halal" restaurant that also serves alcohol is never more than likely: the two do not go together.
+    if place.get("halal") == "only":
+        if place.get("alcohol"):
+            return "likely", "Marked halal on OpenStreetMap, but it serves alcohol — ask which dishes are halal"
+        return "verified", "Marked as halal only on OpenStreetMap"
     if place.get("qloo_halal") == "listed":
+        if place.get("alcohol"):
+            return "likely", "Listed as a halal restaurant (Qloo), but it serves alcohol — ask which dishes are halal"
         return "verified", "Listed as a halal restaurant (Qloo)"
+    if place.get("halal") == "yes":
+        return "likely", "Halal options marked on OpenStreetMap — ask which dishes are halal"
     if place.get("alcohol"):
         return "unknown", "Serves alcohol — ask whether the meat is halal"
     if (country_code or "").lower() in MUSLIM_MAJORITY:

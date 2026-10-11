@@ -51,7 +51,8 @@ HALAL_CUISINE = "urn:tag:cuisine:qloo:halal"
 # The place itself is listed as a halal restaurant (vs. diners merely mentioning halal in reviews)
 HALAL_LISTED = {"urn:tag:category:place:halal_restaurant", "urn:tag:genre:place:restaurant:halal"}
 NO_ALCOHOL = _cat("bar", "pub", "night_club", "wine_bar", "brewery", "cocktail_bar", "beer_garden", "liquor_store",
-                  "casino", "hookah_bar") + tuple(f"urn:tag:genre:place:{g}" for g in (
+                  "casino", "hookah_bar", "live_music_bar", "beer_hall", "izakaya", "cabaret_club", "sake_bar",
+                  "sports_bar", "gastropub") + tuple(f"urn:tag:genre:place:{g}" for g in (
                   "pub", "restaurant:bar", "restaurant:pub", "restaurant:wine_bar", "restaurant:cocktail_bar", "restaurant:brewery")) + (
                   "urn:tag:cuisine:qloo:meyhane",)
 # The place serves alcohol (many restaurants do): shown to the traveller and ranked lower, but not excluded
@@ -62,7 +63,7 @@ AUDIENCES = {"muslim": "urn:audience:lifestyle_preferences_beliefs:islam",
              "kids": "urn:audience:life_stage:parents_with_young_children"}
 # Turkish names add endings: "Ege Rum Meyhanesi", "Taksim Birahanesi", "Bira Evi"
 _ALCOHOL_NAME = re.compile(r"\b(bar|pub|brewery|brewpub|taproom|tavern|winery|wine|cocktails?|nightclub|night club|"
-                           r"beer|liquor|saloon|casino|meyhane\w*|birahane\w*|bira|izakaya|biergarten)\b", re.I)
+                           r"beer|bierhalle|brauhaus|brauerei|bierhaus|liquor|saloon|casino|cabaret|meyhane\w*|birahane\w*|bira|izakaya|biergarten)\b", re.I)
 
 
 class QlooError(RuntimeError):
@@ -160,10 +161,10 @@ def _simplify(e: dict) -> dict:
     # /v2/insights names it "id", /search "tag_id"
     tag_ids = [t.get("id") or t.get("tag_id") for t in (e.get("tags") or []) if isinstance(t, dict) and (t.get("id") or t.get("tag_id"))]
     imgs, img = p.get("images") or [], p.get("image")
-    if imgs and isinstance(imgs[0], dict):
-        img = imgs[0].get("url")
-    elif isinstance(img, dict):
-        img = img.get("url")
+    img = img.get("url") if isinstance(img, dict) else img if isinstance(img, str) else None
+    # Google's /gps-cs-s/ photo links no longer open outside Google (HTTP 400/403): use another photo or none
+    urls = [x.get("url") for x in imgs if isinstance(x, dict) and x.get("url")] + ([img] if img else [])
+    img = next((u for u in urls if "/gps-cs-s/" not in u), None)
     q = e.get("query") or {}
     kw = sorted((k for k in p.get("keywords") or [] if isinstance(k, dict) and k.get("name")), key=lambda k: -(k.get("count") or 0))
     kids = next((g.get("weight") for g in p.get("good_for") or [] if isinstance(g, dict) and g.get("id") == KIDS_TAG), None)
@@ -185,12 +186,30 @@ def _simplify(e: dict) -> dict:
         "tag_ids": tag_ids,
         "categories": [t.rsplit(":", 1)[1].replace("_", " ") for t in tag_ids if t.startswith("urn:tag:category:place:")][:4],
         "affinity": q.get("affinity") or e.get("affinity"),
+        "closed_for_good": bool(p.get("is_closed")),
+        # rooms, a check-in time or hotel stars: a place to sleep, never a sight
+        "lodging": bool(p.get("check_in_time") or p.get("hotel_class") or p.get("number_of_rooms")),
         "popularity": e.get("popularity"),
     }
 
 
+# places built around drinking, by the last part of a category, genre or decor tag ("american_beer_hall")
+_ALCOHOL_KINDS = {"bar", "pub", "brewery", "brewpub", "wine_bar", "cocktail_bar", "beer_hall", "beer_garden", "izakaya",
+                  "cabaret", "cabaret_club", "night_club", "nightclub", "sake_bar", "live_music_bar", "sports_bar", "tavern",
+                  "winery", "meyhane", "whiskey_bar", "gastropub", "lounge_bar", "hookah_bar", "liquor_store", "casino"}
+_ALCOHOL_ENDS = ("_pub", "_beer_hall", "_brewery", "_wine_bar", "_cocktail_bar", "_night_club", "_cabaret")
+
+
 def is_alcohol_venue(item: dict) -> bool:
-    return bool(set(item.get("tag_ids") or ()) & set(NO_ALCOHOL)) or bool(_ALCOHOL_NAME.search(item.get("name", "")))
+    ids = set(item.get("tag_ids") or ())
+    if ids & set(NO_ALCOHOL) or _ALCOHOL_NAME.search(item.get("name", "")):
+        return True
+    for t in ids:
+        if t.startswith(("urn:tag:category:place:", "urn:tag:genre:place:", "urn:tag:decor:")):
+            last = t.rsplit(":", 1)[-1]
+            if last in _ALCOHOL_KINDS or last.endswith(_ALCOHOL_ENDS):
+                return True
+    return False
 
 
 def serves_alcohol(item: dict) -> bool:
