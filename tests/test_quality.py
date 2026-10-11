@@ -354,3 +354,15 @@ def test_known_for_the_team_they_love():
 @pytest.mark.parametrize("name, brands, same", [("Hiba Street", {"hiba express"}, True), ("Chicken Street", {"chicken shop"}, False)])
 def test_chains_by_their_own_first_word(name, brands, same):
     assert agent._chain_in(name, brands) == same
+
+
+def test_one_topic_once():
+    t = trip("The kids love dinosaurs")
+    assert agent._topic_hits(t, {"known_for": ["dinosaur skeletons", "dinosaurs"], "tag_ids": []}) == ["dinosaurs"]
+
+
+def test_one_dinner_however_late_the_second():
+    final = {"days": [{"stops": [{"time": "18:45", "kind": "meal", "name": "Dinner"},
+                                 {"time": "21:20", "kind": "meal", "name": "Second dinner"}]}]}
+    agent._untangle(final)
+    assert [s["name"] for s in final["days"][0]["stops"]] == ["Dinner"]

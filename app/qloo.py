@@ -103,6 +103,7 @@ async def _get(path: str, params: dict) -> dict:
     key = path + "?" + json.dumps(params, sort_keys=True)
     hit = _cache.get(key)
     if hit and time.time() - hit[0] < 3600:
+        stats["cached"] += 1
         return hit[1]
     if config.QLOO_MOCK:
         return _mock(path, params)

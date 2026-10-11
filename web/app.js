@@ -241,7 +241,8 @@ function modelName(m) {
 function cuisine(c) { return String(c).replace(/_/g, ' ').split(/\s*[,;]\s*/).filter(Boolean).slice(0, 2).join(', '); }
 // the most telling category: "art museum" rather than the generic "tourist attraction"
 function category(cats) {
-  var c = cats.filter(function (c) { return !/^(tourist attraction|point of interest|establishment)$/.test(c); })[0] || cats[0];
+  var plain = cats.filter(function (c) { return !/^(tourist attraction|point of interest|establishment)$/.test(c); });
+  var c = plain.filter(function (c) { return /museum|gallery|park|garden|zoo|aquarium|palace|castle|landmark|monument|memorial|arena|stadium|market|bazaar|bazar|mosque|church|cathedral|temple|shrine|library|theater|theatre|tower|square|bridge|fountain/.test(c); })[0] || plain[0] || cats[0];
   return String(c).replace(/\bbazar\b/, 'bazaar');
 }
 
