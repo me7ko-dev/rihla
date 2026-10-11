@@ -342,3 +342,15 @@ def test_a_prayer_room_in_a_guest_house_comes_after_a_mosque():
     room = {"name": "Guest House En ASAKUSA", "distance_m": 300}
     mosque = {"name": "As-Salaam Masjid", "distance_m": 700}
     assert agent._mosque_score(mosque) < agent._mosque_score(room)
+
+
+def test_known_for_the_team_they_love():
+    t = trip("We love the New York Knicks", typed="Manhattan, New York",
+             dest={"lat": 40.75, "lon": -73.99, "country_code": "us", "name": "Manhattan, New York County"})
+    t.named |= agent._words("New York Knicks")
+    assert agent._topic_hits(t, {"known_for": ["new york knicks", "concerts"]}) == ["New York Knicks"]
+
+
+@pytest.mark.parametrize("name, brands, same", [("Hiba Street", {"hiba express"}, True), ("Chicken Street", {"chicken shop"}, False)])
+def test_chains_by_their_own_first_word(name, brands, same):
+    assert agent._chain_in(name, brands) == same

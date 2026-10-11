@@ -25,6 +25,10 @@ _SECRETS = [v for v in (config.QLOO_API_KEY, config.LLM_API_KEY, config.FALLBACK
 _KEYLIKE = re.compile(r"\b(nvapi-|gsk_|hack_|sk-)[A-Za-z0-9_\-]{6,}")
 
 
+# what a visitor reads when something unexpected breaks (the cause is in the server log, never on the page)
+FAILED = "Rihla could not finish this plan just now — please try again in a minute, or open an example plan below."
+
+
 def _clean(text: str) -> str:
     for v in _SECRETS:
         text = text.replace(v, "***")
@@ -88,10 +92,10 @@ async def make_plan(req: PlanRequest, request: Request):
     except ValueError as e:
         _refund(request)
         raise HTTPException(400, str(e))
-    except Exception as e:
+    except Exception:
         _refund(request)
         log.exception("plan failed")
-        raise HTTPException(502, _clean(f"Planning failed: {str(e)[:200]}"))
+        raise HTTPException(502, FAILED)
 
 
 @app.post("/api/plan/stream")
@@ -111,10 +115,10 @@ async def make_plan_stream(req: PlanRequest, request: Request):
         except asyncio.CancelledError:
             _refund(request)  # the visitor left before the plan was ready
             raise
-        except Exception as e:
+        except Exception:
             _refund(request)
             log.exception("plan failed")
-            await q.put({"type": "error", "detail": _clean(f"Planning failed: {str(e)[:200]}")})
+            await q.put({"type": "error", "detail": FAILED})
 
     async def events():
         task = asyncio.create_task(run())

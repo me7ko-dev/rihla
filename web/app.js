@@ -240,7 +240,10 @@ function modelName(m) {
 }
 function cuisine(c) { return String(c).replace(/_/g, ' ').split(/\s*[,;]\s*/).filter(Boolean).slice(0, 2).join(', '); }
 // the most telling category: "art museum" rather than the generic "tourist attraction"
-function category(cats) { return cats.filter(function (c) { return !/^(tourist attraction|point of interest|establishment)$/.test(c); })[0] || cats[0]; }
+function category(cats) {
+  var c = cats.filter(function (c) { return !/^(tourist attraction|point of interest|establishment)$/.test(c); })[0] || cats[0];
+  return String(c).replace(/\bbazar\b/, 'bazaar');
+}
 
 function render(plan, city) {
   $('#result').hidden = false;

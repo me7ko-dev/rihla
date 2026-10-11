@@ -1,6 +1,6 @@
 """Builds the example plans shown on the home page (web/examples/*.json) with the live agent.
 The agent writes a different plan each time: each example is made a few times and the richest plan is kept.
-Run after changing the agent:  python make_examples.py [id ...]"""
+Run after changing the agent:  python make_examples.py [--fresh] [id ...]   (--fresh: do not keep an earlier plan)"""
 import asyncio
 import datetime as dt
 import json
@@ -13,7 +13,8 @@ from app.osm import distance_m
 OUT = Path(__file__).resolve().parent / "web" / "examples"
 TRIES = 3
 EXAMPLES = {
-    "london-family": dict(destination="London", days=2, travellers="Family of four, kids aged 7 and 11",
+    # London starts on a Friday, so the example shows Jumu'ah
+    "london-family": dict(destination="London", days=2, weekday=4, travellers="Family of four, kids aged 7 and 11",
                           tastes="We love Pixar movies and the Harry Potter books. The kids are into Minecraft and dinosaurs."),
     "istanbul-couple": dict(destination="Sultanahmet, Istanbul", days=2, travellers="Couple in their 30s",
                             tastes="We love Orhan Pamuk's novels, Sami Yusuf's music, Ottoman history, calligraphy, coffee and sweets."),
@@ -37,11 +38,20 @@ def richness(plan: dict) -> float:
     return score
 
 
+def first_day(weekday: int | None) -> dt.date:
+    """About two weeks ahead; on that weekday if one is given (4 = Friday)."""
+    day = dt.date.today() + dt.timedelta(days=14)
+    while weekday is not None and day.weekday() != weekday:
+        day += dt.timedelta(days=1)
+    return day
+
+
 async def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    start = dt.date.today() + dt.timedelta(days=14)
-    for key in sys.argv[1:] or EXAMPLES:
+    fresh = "--fresh" in sys.argv
+    for key in [a for a in sys.argv[1:] if not a.startswith("--")] or EXAMPLES:
         ex, best = EXAMPLES[key], None
+        start = first_day(ex.get("weekday"))
         for _ in range(TRIES):
             try:
                 plan = await agent.plan(ex["destination"], ex["days"], start, ex["travellers"], ex["tastes"])
@@ -58,12 +68,12 @@ async def main() -> None:
             old = json.loads((OUT / f"{key}.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             old = None
-        if old and richness(old) > richness(best):
+        if old and not fresh and richness(old) > richness(best):
             used = {s["name"].lower() for d in old["days"] for s in d["stops"]}
             old["nearby"] = {k: [p for p in v if p["name"].lower() not in used] for k, v in best.get("nearby", {}).items()}
             print(f"{key}: the earlier plan is richer ({richness(old):.1f}) — kept, with this run's places around it", flush=True)
             best = old
-        best["example"] = dict(ex, id=key)
+        best["example"] = {k: v for k, v in dict(ex, id=key).items() if k != "weekday"}
         best.pop("llm_log", None)
         (OUT / f"{key}.json").write_text(json.dumps(best, ensure_ascii=False), encoding="utf-8")
         print(f"{key}: kept {best['title']} — {sum(len(d['stops']) for d in best['days'])} stops", flush=True)

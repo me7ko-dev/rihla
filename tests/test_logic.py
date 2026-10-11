@@ -202,13 +202,16 @@ class _Trip:
 
 def test_jumuah_on_friday_moves_overlapping_visits():
     day = {"date": "2026-10-16", "stops": [
+        {"time": "10:00", "kind": "sight", "name": "Louvre", "lat": 48.861, "lon": 2.336},      # the morning visit stays
         {"time": "13:00", "kind": "sight", "name": "59 Rivoli", "lat": 48.86, "lon": 2.34},
         {"time": "13:36", "kind": "prayer", "prayer": "Dhuhr", "name": "Grande Mosquée", "lat": 48.84, "lon": 2.355, "ref": "m"},
     ]}
     agent._jumuah({"days": [day]}, _Trip())
+    agent._untangle({"days": [day]})
     prayer = next(s for s in day["stops"] if s["kind"] == "prayer")
-    visit = next(s for s in day["stops"] if s["kind"] == "sight")
-    assert prayer.get("jumuah") and visit["time"] == "14:30"
+    times = {s["name"]: s["time"] for s in day["stops"]}
+    # 59 Rivoli: after the sermon and the prayer (45 min, arriving 15 min early) and the ride back from the mosque
+    assert prayer.get("jumuah") and times["Louvre"] == "10:00" and agent._mins(times["59 Rivoli"]) >= agent._mins("14:36")
 
 
 def test_opening_hours():
@@ -266,9 +269,9 @@ def test_tips_filed_inside_a_day_are_lifted():
 @pytest.mark.parametrize("tips, kept", [
     ("Buy a Museum Pass. Wear comfortable shoes.", ["Buy a Museum Pass. Wear comfortable shoes."]),  # one text, seen 04.10
     ("Buy a Museum Pass\n- \nWear comfortable shoes", ["Buy a Museum Pass", "Wear comfortable shoes"]),  # no "-" tip
-    ("Buy a Museum Pass; Wear comfortable shoes", ["Buy a Museum Pass", "Wear comfortable shoes"]),
-    # one sentence with a clause after "; " stays whole (seen in Sarajevo, 11.10)
+    # "; " joins two halves of one tip (seen in Sarajevo and Istanbul, 11.10): it stays whole
     ("Wear comfortable shoes; many sites are close", ["Wear comfortable shoes; many sites are close"]),
+    ("Wear comfortable shoes; Sultanahmet's streets are cobbled", ["Wear comfortable shoes; Sultanahmet's streets are cobbled"]),
     (None, []), (7, []),
 ])
 def test_tips_written_as_text(tips, kept):

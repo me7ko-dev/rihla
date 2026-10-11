@@ -38,12 +38,13 @@ Qloo is behind every kind of stop, not just one feature:
 |---|---|
 | Your favourites become taste signals ("Harry Potter" → the book, not the album) | `/search`, ranked by name match, type and Qloo popularity |
 | Sights ranked by your taste **and** by Qloo audiences *Islam* and *Parents with young children* | `/v2/insights` with `signal.interests.entities` + `signal.demographics.audiences` |
-| Honest "because you love X": each taste is also asked on its own; a place carries the badge only if it is in that taste's own top results | `/v2/insights`, one query per signal |
-| Topics you wrote ("dinosaurs", "calligraphy") become Qloo tags and rank places too; *Known for dinosaurs* only when Qloo tags the place with it | `/v2/tags` → `signal.interests.tags` |
+| Honest "because you love X": each taste is asked on its own, and a place carries the badge only if that taste lifts it at least 5 places above the same query without any taste (the city's famous ten are never "because you love Frozen") | `/v2/insights`, one query per signal + one baseline |
+| Topics you wrote ("dinosaurs", "calligraphy") become Qloo tags and rank places too; *Known for dinosaurs* only when Qloo tags the place with it, or reviewers' keywords are exactly your topic ("dinosaur fossils" yes, "street food" for a street-art lover no) | `/v2/tags` → `signal.interests.tags`, place keywords |
 | Famous highlights next to personal finds | `/v2/insights` without signals |
 | Halal restaurants ranked by your taste; "listed" (halal-restaurant category) vs "mentioned" (reviews) | `filter.tags=urn:tag:cuisine:qloo:halal`, place tags |
 | No bars, pubs, nightclubs, meyhanes — excluded on Qloo's side | `filter.exclude.tags` |
-| Mosques, photos, descriptions, *good for kids*, what reviewers mention most ("dinosaurs" at the Natural History Museum) | place properties |
+| Mosques, photos, descriptions, *good for kids*, opening hours, what reviewers mention most ("dinosaurs" at the Natural History Museum) | place properties |
+| Never a hotel, shop, office or a place closed for good as a "sight" (rooms, check-in times, `is_closed`) | place properties |
 
 OpenStreetMap adds halal-tagged restaurants and more mosques; AlAdhan gives prayer times (calculation method per country).
 
@@ -58,8 +59,9 @@ flowchart LR
     A -- "mosques_near" --> M["Qloo + OpenStreetMap mosques"]
     U --> P["AlAdhan prayer times"]
     Q1 & Q2 & H & M & P --> W["Plan written by the agent"]
-    W --> C["Code checks: real places only, opening hours,<br/>prayers at the exact time and nearest mosque,<br/>Jumu'ah, short routes, meals nearby, no repeats"]
-    C --> R["Day-by-day plan on a map"]
+    W --> C["Code checks, in rounds: real places only, opening hours,<br/>prayers at the exact time, the mosque on the way,<br/>Jumu'ah, short routes, meals open and nearby, no repeats"]
+    C --> E["Last model call: title, themes and tips<br/>match the final stops"]
+    E --> R["Day-by-day plan on a map,<br/>and a companion on the day"]
 ```
 
 An LLM agent (NVIDIA Nemotron 3 Super, fallback Groq) researches with tools, then writes the itinerary:
@@ -68,9 +70,19 @@ An LLM agent (NVIDIA Nemotron 3 Super, fallback Groq) researches with tools, the
    "dinosaurs" or "calligraphy" are matched against what places are known for)
 2. `taste_places` — museums, landmarks, parks, family attractions… ranked by your taste
 3. `halal_food_near`, `mosques_near` — for each day's area (Rihla fills any area the model forgot)
-4. the plan — then code checks it: every stop must be a real place from the tools, meals must be eateries, prayer
-   stops are moved to the exact prayer time and the nearest mosque, nothing repeats (not even another branch of a
-   chain), and a place that matches what you said you love is never left out. The model cannot invent places.
+4. the plan — then code checks it, in rounds until nothing has to be left out: every stop must be a real place from
+   the tools; a place you asked for or that matches what you love is never left out (moved to a day it is open);
+   visits within opening hours; prayers at the exact time, at the mosque on the way between the stops around them
+   (looked up there if none is known), Jumu'ah on Fridays; lunch just after Dhuhr, meals near where you are and open
+   then, no repeats (not even another branch of a chain); time to walk or ride between stops — a visit ends in time
+   to reach the mosque. The model cannot invent places.
+5. a short last call to the model rewrites the title, summary, day themes and tips to match the final stops (and
+   translates the code's texts in a plan in another language).
+
+**Honest halal labels:** *Listed halal* only for a Qloo halal restaurant or `diet:halal=only` on OpenStreetMap;
+`diet:halal=yes` (halal options) is *Likely*; any place that serves alcohol is at most *Likely* and shows *Serves
+alcohol* — and in a plan it is swapped for a place without alcohol nearby when there is one. Texts never claim
+"halal" or "alcohol-free": only the label speaks.
 
 ## Run locally
 
@@ -82,7 +94,7 @@ uvicorn app.main:app --port 8090
 
 Open http://localhost:8090. Qloo responses are cached for a week (the hackathon key allows 10,000 requests a month).
 
-Tests (offline, no keys needed): `pip install pytest && pytest -q`
+Tests (offline, no keys needed — 150 of them, from halal labels to Jumu'ah): `pip install pytest && pytest -q`
 
 ## On the day: the Today companion
 
