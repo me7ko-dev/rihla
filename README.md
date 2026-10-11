@@ -2,7 +2,7 @@
 
 **A travel agent that knows your taste and respects your faith.**
 
-🌍 **Live demo:** https://rihla-agent.vercel.app · 🎬 **Video (1 min):** https://youtu.be/KpyL4OQyVLw · 📦 **Code:** https://github.com/me7ko-dev/rihla ·
+🌍 **Live demo:** https://rihla-agent.vercel.app · 🎬 **Video (85 s):** https://youtu.be/djEqkOn2J7s · 📦 **Code:** https://github.com/me7ko-dev/rihla ·
 [![tests](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml/badge.svg)](https://github.com/me7ko-dev/rihla/actions/workflows/tests.yml)
 
 ![A two-day family plan for London on a Friday: the Natural History Museum "known for dinosaurs" until 10:54, Jumu'ah at Holborn Mosque, lunch just after, Leadenhall Market "known for Harry Potter"](docs/rihla-plan.png)
@@ -94,7 +94,7 @@ uvicorn app.main:app --port 8090
 
 Open http://localhost:8090. Qloo responses are cached for a week (the hackathon key allows 10,000 requests a month).
 
-Tests (offline, no keys needed — 150 of them, from halal labels to Jumu'ah): `pip install pytest && pytest -q`
+Tests (offline, no keys needed — 159 of them, from halal labels to Jumu'ah): `pip install pytest && pytest -q`
 
 ## On the day: the Today companion
 
