@@ -44,6 +44,8 @@ daughters wife husband aged age years old year who what all some any lot lots bi
 especially things stuff place places food spicy good great movies movie films film books book novels novel music
 songs series shows show games game""".split())
 # not for young kids, whatever the taste data says
+# Qloo also tags tour operators and rental desks as "tourist attraction": a place to visit is not an office
+NOT_A_SIGHT = re.compile(r"\b(tour operator|tour agency|travel agency|car rental|rental agency|ticket agency)\b", re.I)
 GRIM = re.compile(r"tortur|ripper|dungeon|horror|serial killer|execution|gallows|crime museum|sex|erotic|strip club", re.I)
 
 SYSTEM = """You are Rihla, a travel planner for Muslim travellers and families.
@@ -539,7 +541,8 @@ async def _taste_places(trip: Trip, cats: list[str], args: dict) -> dict:
                                              exclude_tags=avoid),  # the city's best-loved places: no taste, no audience
                                *[qloo.insights("place", interests=[r], tags=union, take=20, **ask) for r in solo],
                                return_exceptions=True)
-    ok = lambda it: it.get("lat") is not None and not (trip.kids and GRIM.search(it["name"] + " " + it.get("description", "")))
+    ok = lambda it: it.get("lat") is not None and not (trip.kids and GRIM.search(it["name"] + " " + it.get("description", ""))) \
+        and not NOT_A_SIGHT.search(" ".join(it.get("categories") or []))
     together, famous = [[it for it in x if ok(it)] if isinstance(x, list) else [] for x in res[:2]]
     combined = [[it for it in together if set(it["tag_ids"]) & set(qloo.CATEGORIES[c])] for c in cats]
     own = {r: [it for it in x if ok(it)] if isinstance(x, list) else [] for r, x in zip(solo, res[2:])}
@@ -1342,7 +1345,8 @@ def _nearby(final: dict, trip: Trip) -> dict:
     out = {}
     for kind, pool in trip.pool.items():
         items = [p for ref, p in pool.items() if ref not in used and p.get("lat") is not None and p.get("name")
-                 and (kind != "sights" or not p.get("halal_level"))]
+                 and (kind != "sights" or not (p.get("halal_level") or re.search(
+                     r"restaurant|agency|operator|rental", " ".join(p.get("categories") or [])[:200], re.I)))]
         items.sort(key=order[kind])
         rows = []
         for p in items[:NEARBY_MAX[kind]]:

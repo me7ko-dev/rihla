@@ -423,3 +423,18 @@ def test_open_all_day_reads_24_hours():
     final = {"days": [{"date": "2026-10-18", "stops": [{"time": "16:35", "kind": "sight", "ref": "q:1"}]}]}
     agent._check_hours(final, _Trip({"q:1": square}))
     assert final["days"][0]["stops"][0]["open_today"] == "24 hours"
+
+
+def test_tour_operators_are_not_sights(monkeypatch):
+    def place(i, name, *cats):
+        return {"entity_id": i, "name": name, "location": {"lat": 43.86, "lon": 18.43},
+                "tags": [{"id": "urn:tag:category:place:" + c} for c in cats]}
+
+    async def get(path, params):
+        return {"results": {"entities": [place("a", "Meet Bosnia Tours", "tourist_attraction", "tour_operator", "tour_agency"),
+                                          place("b", "Latin Bridge", "tourist_attraction", "historical_landmark")]}}
+    monkeypatch.setattr(qloo, "_get", get)
+    trip = agent.Trip({"lat": 43.86, "lon": 18.43, "country_code": "ba"}, "", "history")
+    trip.signals, trip.tags = {}, {}
+    out = asyncio.run(agent._taste_places(trip, ["landmark"], {}))
+    assert [p["name"] for p in out["landmark"]] == ["Latin Bridge"]
