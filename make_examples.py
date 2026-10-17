@@ -24,7 +24,8 @@ EXAMPLES = {
 
 
 def richness(plan: dict) -> float:
-    """More personal and famous places, fewer stops the code had to add, listed-halal meals, no long rides."""
+    """More personal and famous places, fewer stops the code had to add, listed-halal meals (lunch and dinner at a
+    restaurant, not a coffee shop), no long rides."""
     score = 0.0
     for day in plan["days"]:
         for s in day["stops"]:
@@ -32,7 +33,10 @@ def richness(plan: dict) -> float:
                 score += 1 + 2 * bool(s.get("topic") or s.get("requested")) + bool(s.get("because")) + bool(s.get("popular"))
                 score -= 1.5 * bool(s.get("added_by")) + 0.5 * (not s.get("description"))
             elif s["kind"] == "meal":
-                score += {"verified": 1, "likely": 0.5}.get(s.get("halal_level"), 0) - 0.5 * bool(s.get("alcohol"))
+                t = int(s["time"][:2]) * 60 + int(s["time"][3:5])
+                main = 11 * 60 + 30 <= t <= 15 * 60 or t >= 17 * 60
+                score += {"verified": 1, "likely": 0.5}.get(s.get("halal_level"), 0) - 0.5 * bool(s.get("alcohol")) \
+                    - 2 * (main and agent._light(s))
         pts = [(s["lat"], s["lon"]) for s in day["stops"] if s["kind"] != "prayer" and s.get("lat") is not None]
         score -= 0.4 * sum(max(0, distance_m(*pts[i], *pts[i + 1]) - 2000) for i in range(len(pts) - 1)) / 1000
     return score

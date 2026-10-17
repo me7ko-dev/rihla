@@ -383,3 +383,45 @@ def test_a_burger_chain_gives_way_to_a_local_place_nearby():
                                            "halal_level": "likely"}]}
     asyncio.run(agent._check_meals({"days": [day]}, t))
     assert day["stops"][1]["name"] == "Restoran Yasmin"
+
+
+@pytest.mark.parametrize("place, out", [
+    ({"name": "Chaiiwala", "cuisine": "coffee_shop", "kind": "cafe"}, True),
+    ({"name": "Göçmen Artisan Bakery Galata", "categories": ["restaurant", "bakery", "cafe"]}, True),
+    ({"name": "Rose Papillon", "categories": ["cafeteria", "restaurant", "coffee shop"]}, True),
+    ({"name": "Corner Cafe", "kind": "cafe"}, True),
+    ({"name": "Beltaş Cafe and Restaurant", "cuisine": "coffee_shop", "kind": "cafe"}, False),
+    ({"name": "Hiba Express", "cuisine": "kebab, lebanese", "kind": "restaurant"}, False),
+    ({"name": "Deli", "cuisine": "cake, coffee_shop, sandwich", "kind": "cafe"}, False),
+    ({"name": "Kwik Meal", "categories": ["halal restaurant", "restaurant"]}, False),
+    ({"name": "Hawksmoor", "categories": ["steakhouse"]}, False),
+    ({"name": "Nameless"}, False),
+])
+def test_a_coffee_shop_or_a_bakery_is_a_snack(place, out):
+    assert agent._light(place) == out
+
+
+def test_a_real_restaurant_before_a_nearer_coffee_shop():
+    cafe = {"name": "Chaiiwala", "cuisine": "coffee_shop", "kind": "cafe", "halal_level": "verified", "distance_m": 100}
+    grill = {"name": "Hiba Express", "cuisine": "kebab, lebanese", "kind": "restaurant", "halal_level": "verified", "distance_m": 450}
+    assert agent._meal_score(grill, "gb") < agent._meal_score(cafe, "gb")
+
+
+def test_dinner_at_a_coffee_shop_gives_way_to_a_restaurant_nearby():
+    t = trip()
+    t.keep("osm:chai", {"name": "Chaiiwala", "lat": 51.5, "lon": -0.12, "halal_level": "verified", "cuisine": "coffee_shop",
+                        "kind": "cafe"}, "osm", "halal")
+    t.keep("osm:cake", {"name": "Sweet Corner", "lat": 51.5002, "lon": -0.12, "halal_level": "verified",
+                        "cuisine": "cake", "kind": "cafe"}, "osm", "halal")
+    t.keep("osm:hiba", {"name": "Hiba Express", "lat": 51.503, "lon": -0.12, "halal_level": "verified",
+                        "cuisine": "kebab, lebanese", "kind": "restaurant"}, "osm", "halal")
+    meal = lambda at: {"time": at, "kind": "meal", "ref": "osm:chai", "name": "Chaiiwala", "lat": 51.5, "lon": -0.12,
+                       "halal_level": "verified", "cuisine": "coffee_shop", "place_kind": "cafe"}
+    walk = {"time": "17:00", "kind": "sight", "name": "Park", "lat": 51.5, "lon": -0.1201}
+    day = {"date": "2026-10-17", "stops": [walk, meal("18:30")]}
+    asyncio.run(agent._check_meals({"days": [day]}, t))
+    assert day["stops"][1]["name"] == "Hiba Express"  # not the cake shop next door
+    # breakfast or an afternoon tea at a coffee shop is fine
+    day = {"date": "2026-10-17", "stops": [dict(walk, time="09:00"), meal("10:00")]}
+    asyncio.run(agent._check_meals({"days": [day]}, t))
+    assert day["stops"][1]["name"] == "Chaiiwala"

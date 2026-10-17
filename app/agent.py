@@ -1151,6 +1151,13 @@ WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", 
 CHAINS = re.compile(r"\b(mcdonald'?s|burger king|kfc|subway|starbucks|domino'?s|pizza hut|dunkin'?|popeyes|taco bell|"
                     r"wendy'?s|papa john'?s|little caesars|tim hortons|costa coffee|five guys|hardee'?s|carl'?s jr|jollibee|"
                     r"texas chicken|marrybrown|wingstop|panda express|dairy queen)\b", re.I)
+# a coffee shop, tea house, bakery or dessert place is a snack, not lunch or dinner (Chaiiwala for dinner)
+LIGHT = re.compile(r"\b(coffee|caf[eé]|cafeteria|tea|teahouse|tea ?room|chai|bakery|pastry|p[aâ]tisserie|cakes?|desserts?|"
+                   r"sweets?|ice cream|gelato|frozen yogh?urt|juice|smoothies?|donuts?|doughnuts?|chocolate|confectionery|"
+                   r"cr[eê]pes?|waffles?|breakfast|brunch|bagels?|cupcakes?)\b", re.I)
+# ...unless its name says it serves meals ("Beltaş Cafe and Restaurant")
+MEAL_NAME = re.compile(r"\b(restaurant|restoran|ristorante|lokanta|grill|kebab|kebap|kitchen|diner|steakhouse|bistro|"
+                       r"brasserie|eatery|pizzeria|burgers?|biryani|shawarma|mangal)\b", re.I)
 
 
 def _opening(p: dict, date: str | None) -> tuple[int, int] | None | bool:
@@ -1273,7 +1280,20 @@ def _meal_score(x: dict, cc: str = "") -> float:
     step = 300 if cc in halal.MUSLIM_MAJORITY else 700
     return (step * RANK.get(x.get("halal_level"), 3) + 900 * bool(x.get("alcohol")) + 800 * bool(CHAINS.search(x.get("name") or ""))
             - 250 * bool(x.get("because")) - 200 * float(x.get("affinity") or 0) + 400 * bool(x.get("unnamed"))
-            + float(x.get("distance_m") or 0))
+            + 500 * _light(x) + float(x.get("distance_m") or 0))
+
+
+def _light(x: dict) -> bool:
+    """A cafe, tea house, bakery or dessert place: everything it is known as (OpenStreetMap cuisine, Qloo categories)
+    is light. A plain "restaurant", which Qloo adds to bakeries too, does not count; a name with "restaurant" or
+    "grill" is a real meal."""
+    if MEAL_NAME.search(x.get("name") or ""):
+        return False
+    kinds = [k.replace("_", " ").strip() for k in re.split(r"[,;]", x.get("cuisine") or "")] + list(x.get("categories") or [])
+    kinds = [k for k in kinds if k and k.lower() not in ("restaurant", "food", "regional", "local")]
+    if not kinds:
+        return (x.get("place_kind") or x.get("kind")) in ("cafe", "ice_cream")
+    return all(LIGHT.search(k) for k in kinds)
 
 
 LODGING_NAME = re.compile(r"\b(hotel|hostel|guest ?house|inn|residence|apartments?|ゲストハウス|ホテル)\b", re.I)
@@ -1519,16 +1539,19 @@ async def _check_meals(final: dict, trip: Trip) -> int:
             twice = _chain_in(st.get("name", ""), seen_brands)  # another branch of a chain already in the trip
             twice = twice or bool(CHAINS.search(st.get("name") or ""))  # a burger chain: a local place nearby is better
             seen_brands |= {_brand(st.get("name", "")), _key(st.get("name", ""))}
-            if not far and not closed and not drinks and not twice:
+            # lunch or dinner at a coffee shop or a bakery: a real restaurant nearby is better
+            main = 11 * 60 + 30 <= t <= 15 * 60 or t >= 17 * 60
+            light = main and _light(trip.places.get(st.get("ref")) or st)
+            if not far and not closed and not drinks and not twice and not light:
                 continue
             rank = RANK.get(st.get("halal_level"), 3)
-            reach = 800 if (drinks or twice) and not far and not closed else 1500
+            reach = 800 if (drinks or twice or light) and not far and not closed else 1500
 
             def options():
                 return [x for x in trip.near("halal", *here, reach, 40) if _key(x["name"]) not in used and x["ref"] != st.get("ref")
                         and not _chain_in(x["name"], used | seen_brands) and RANK.get(x.get("halal_level"), 3) <= rank
                         and _open_at(x, day.get("date"), t) and not x.get("closed_for_good") and not (drinks and x.get("alcohol"))
-                        and not CHAINS.search(x.get("name") or "")]
+                        and not CHAINS.search(x.get("name") or "") and not (main and not far and not closed and _light(x))]
             if not options() and (far or closed):  # nothing looked up around here yet: ask Qloo and OpenStreetMap
                 await _safe_tool(trip, "halal_food_near", {"lat": here[0], "lon": here[1], "radius_m": 1200})
             food = min(options(), key=lambda x: _meal_score(x, cc), default=None)
