@@ -23,15 +23,16 @@ EXAMPLES = {
 }
 
 
-def richness(plan: dict) -> float:
+def richness(plan: dict, kids: bool = False) -> float:
     """More personal and famous places, fewer stops the code had to add, listed-halal meals (lunch and dinner at a
-    restaurant, not a coffee shop), no long rides."""
+    restaurant, not a coffee shop), more walks and fewer rides (a family should not take the metro seven times a day)."""
     score = 0.0
     for day in plan["days"]:
         for s in day["stops"]:
             if s["kind"] == "sight":
                 score += 1 + 2 * bool(s.get("topic") or s.get("requested")) + bool(s.get("because")) + bool(s.get("popular"))
                 score -= 1.5 * bool(s.get("added_by")) + 0.5 * (not s.get("description"))
+                score -= 3 * bool(agent.CLOSED_FOR_YEARS.search(s.get("name", "").strip()))  # from before the rule
             elif s["kind"] == "meal":
                 t = int(s["time"][:2]) * 60 + int(s["time"][3:5])
                 main = 11 * 60 + 30 <= t <= 15 * 60 or t >= 17 * 60
@@ -39,6 +40,7 @@ def richness(plan: dict) -> float:
                     - 2 * (main and agent._light(s))
         pts = [(s["lat"], s["lon"]) for s in day["stops"] if s["kind"] != "prayer" and s.get("lat") is not None]
         score -= 0.4 * sum(max(0, distance_m(*pts[i], *pts[i + 1]) - 2000) for i in range(len(pts) - 1)) / 1000
+        score -= 0.6 * sum(distance_m(*pts[i], *pts[i + 1]) * 1.3 / 1000 > agent.WALK[kids][0] for i in range(len(pts) - 1))
     return score
 
 
@@ -74,6 +76,8 @@ async def main() -> None:
     fresh = "--fresh" in sys.argv
     for key in [a for a in sys.argv[1:] if not a.startswith("--")] or EXAMPLES:
         ex, best = EXAMPLES[key], None
+        kids = bool(agent.KIDS.search(ex["travellers"]))
+        rich = lambda p: richness(p, kids)
         start = first_day(ex.get("weekday"))
         for _ in range(TRIES):
             try:
@@ -81,8 +85,8 @@ async def main() -> None:
             except Exception as e:  # a slow model call: try again
                 print(f"{key}: failed ({str(e)[:80]})", flush=True)
                 continue
-            print(f"  {key}: {richness(plan):.1f} — {plan['title']} ({plan['seconds']} s)", flush=True)
-            if best is None or richness(plan) > richness(best):
+            print(f"  {key}: {rich(plan):.1f} — {plan['title']} ({plan['seconds']} s)", flush=True)
+            if best is None or rich(plan) > rich(best):
                 best = plan
         if not best:
             continue
@@ -91,10 +95,10 @@ async def main() -> None:
             old = json.loads((OUT / f"{key}.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             old = None
-        if old and not fresh and richness(old) > richness(best):
+        if old and not fresh and rich(old) > rich(best):
             used = {s["name"].lower() for d in old["days"] for s in d["stops"]}
             old["nearby"] = {k: [p for p in v if p["name"].lower() not in used] for k, v in best.get("nearby", {}).items()}
-            print(f"{key}: the earlier plan is richer ({richness(old):.1f}) — kept, with this run's places around it", flush=True)
+            print(f"{key}: the earlier plan is richer ({rich(old):.1f}) — kept, with this run's places around it", flush=True)
             best = old
         best["example"] = {k: v for k, v in dict(ex, id=key).items() if k != "weekday"}
         best.pop("llm_log", None)

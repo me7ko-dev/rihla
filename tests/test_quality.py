@@ -325,7 +325,7 @@ def test_dinner_rather_than_an_afternoon_snack():
 
 
 @pytest.mark.parametrize("name, cats", [("Toronto bicycle tour & events", []), ("The Centre Pompidou", ["art museum"]),
-                                        ("Two Temple Place", ["event venue"])])
+                                        ("Two Temple Place", ["event venue"]), ("BT Tower", ["tourist attraction"])])
 def test_more_places_that_are_not_visits(name, cats):
     assert agent._not_a_sight({"name": name, "categories": cats}, trip())
 

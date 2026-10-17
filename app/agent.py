@@ -57,8 +57,9 @@ NOT_A_SIGHT = re.compile(r"\b(tour operator|tour agency|travel agency|car rental
 SHOP = re.compile(r"\b(store|shop|boutique|mall|grocery|supermarket|charity|market|club|organization|association|"
                   r"non profit|station|event venue|banquet hall|dance hall)\b", re.I)
 NOT_A_SIGHT_NAME = re.compile(r"\b(tours?|rentals?|travel agency|hostel|hotel)\b", re.I)  # "Toronto bicycle tour & events"
-# long closures the data does not show yet (the place is listed with opening hours): never planned as a visit
-CLOSED_FOR_YEARS = re.compile(r"^(the )?centre pompidou$|^ontario science centre$", re.I)
+# long closures the data does not show yet (the place is listed with opening hours): never planned as a visit;
+# the BT Tower has been closed to visitors since 1981
+CLOSED_FOR_YEARS = re.compile(r"^(the )?centre pompidou$|^ontario science centre$|^(the )?bt tower$", re.I)
 ATTRACTION = re.compile(r"museum|gallery|landmark|historical|monument|memorial|zoo|aquarium|park|garden|palace|castle|"
                         r"cathedral|church|mosque|temple|shrine|tourist attraction|observation|viewpoint|stadium|arena|library", re.I)
 HOTEL_TEXT = re.compile(r"\b(suites|guest rooms|butler service|complimentary breakfast|check-in|boutique hotel)\b", re.I)

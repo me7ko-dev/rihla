@@ -342,7 +342,7 @@ function render(plan, city) {
       var m = markers[el.dataset.id]; if (!m) return;
       var d = +el.dataset.id.split('-')[0];
       document.querySelectorAll('#daybar button').forEach(function (x) { x.classList.toggle('on', +x.dataset.d === d); });
-      showDay(d); map.setView(m.getLatLng(), 16); m.openPopup();
+      showDay(d, true); map.setView(m.getLatLng(), 16); m.openPopup();
       // on a phone the map is above the list: bring it into view, or the tap seems to do nothing
       if (window.innerWidth <= 900) $('#map').scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
@@ -567,13 +567,15 @@ function locate(btn) {
   }, function () { comp.msg = 'Location is off — showing what is around your plan instead.'; drawBody(); }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
 }
 
-function showDay(d) {
+// zoomTo: the map goes straight to one stop (a zoom to the whole day still moving would swallow it and leave
+// that stop's popup cut off at the edge of a phone's map)
+function showDay(d, zoomTo) {
   var pts = [];
   dayLayers.forEach(function (dl, i) {
     var on = d < 0 || i === d;
     if (on) { dl.addTo(layer); dl.eachLayer(function (m) { if (m.getLatLng) pts.push(m.getLatLng()); }); } else dl.remove();
   });
-  if (pts.length) map.fitBounds(pts, { padding: [30, 30] });
+  if (pts.length && !zoomTo) map.fitBounds(pts, { padding: [30, 30] });
 }
 
 function distKm(a, b) {
