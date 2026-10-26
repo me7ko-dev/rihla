@@ -279,6 +279,17 @@ def test_tips_written_as_text(tips, kept):
     assert agent._usable(final, 1) and final["tips"] == kept
 
 
+def test_a_plan_written_in_the_shape_of_the_schema_is_unwrapped():
+    stop = {"time": "09:00", "kind": "sight", "ref": "qloo:1", "why": "Ghibli"}
+    final = {"type": "object", "required": ["title", "days"], "properties": {  # seen with Nemotron 3.5 Lightning, 26.10
+        "title": {"type": "string", "description": "Paris Ghibli Family Trip"}, "tips": ["Buy a carnet"],
+        "days": [{"day": 1, "theme": "Art", "stops": [stop]}]}}
+    assert agent._usable(final, 1)
+    assert final["title"] == "Paris Ghibli Family Trip" and final["tips"] == ["Buy a carnet"] and "type" not in final
+    # only the schema, no plan inside: still refused
+    assert not agent._usable({"type": "object", "properties": {"days": {"type": "array", "items": {}}}}, 1)
+
+
 def test_extra_days_are_cut():
     final = {"days": [{"day": n, "stops": [{"time": "09:00"}]} for n in (1, 2, 3)]}
     assert agent._usable(final, 2) and [d["day"] for d in final["days"]] == [1, 2]

@@ -236,7 +236,8 @@ function steps(plan) { return (plan.trace || []).filter(function (t) { return AP
 function qloo(plan) { var q = plan.qloo_calls || {}; return (q.requests || 0) + (q.cached || 0); }
 function modelName(m) {
   m = String(m || '');
-  return /nemotron/i.test(m) ? 'NVIDIA Nemotron 3 Super' : /gpt-oss/i.test(m) ? 'GPT-OSS 120B on Groq' : m.split('/').pop();
+  return /nemotron-3-ultra/i.test(m) ? 'NVIDIA Nemotron 3 Ultra' : /nemotron-3-super/i.test(m) ? 'NVIDIA Nemotron 3 Super' :
+    /nemotron-3\.5-lightning/i.test(m) ? 'NVIDIA Nemotron 3.5 Lightning' : /gpt-oss/i.test(m) ? 'GPT-OSS 120B on Groq' : m.split('/').pop();
 }
 function cuisine(c) { return String(c).replace(/_/g, ' ').split(/\s*[,;]\s*/).filter(Boolean).slice(0, 2).join(', '); }
 // the most telling category: "art museum" rather than the generic "tourist attraction"

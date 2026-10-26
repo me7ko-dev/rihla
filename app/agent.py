@@ -159,8 +159,9 @@ class LLM:
         # no hidden SDK retries (3 x 150 s would outlast the server): a slow provider hands over to the next one
         self.clients = []
         for key, url, model, limit, extra in ((config.LLM_API_KEY, config.LLM_BASE_URL, config.LLM_MODEL, 150, nv),
+                                              (config.LLM_API_KEY, config.LLM_BASE_URL, config.LLM_MODEL_BACKUP, 90, nv),
                                               (config.FALLBACK_API_KEY, config.FALLBACK_BASE_URL, config.FALLBACK_MODEL, 90, {})):
-            if key:
+            if key and model:
                 self.clients.append((AsyncOpenAI(api_key=key, base_url=url, timeout=limit, max_retries=0), model, extra, limit))
         self.deadline = deadline or time.time() + BUDGET_S
         self.used = config.LLM_MODEL
@@ -192,7 +193,13 @@ class LLM:
                     last = e
                     if re.search(r"per day|TPD|RPD|daily", str(e), re.I):
                         break  # a daily limit: waiting a few seconds will not help, the next provider might
-                    await asyncio.sleep(4 * (attempt + 1))
+                    # a per-minute limit (Groq's free tier: 8000 tokens a minute, the final plan alone asks ~7000)
+                    # says how long to wait: wait that long when there is time, not a fixed few seconds
+                    m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", str(e))
+                    pause = (int(m.group(1) or 0) * 60 + float(m.group(2)) + 1) if m else 4 * (attempt + 1)
+                    if pause > min(45, self.left() - 60):
+                        break
+                    await asyncio.sleep(pause)
                 except APIError as e:  # 5xx / timeouts: try the next provider
                     last = e
                     break
@@ -215,6 +222,12 @@ def _json(text: str) -> dict | None:
 def _usable(final, days: int) -> bool:
     """Keep only well-formed days and stops (the model sometimes slips a stray word into an array, like
     '"days": [{...}, "tips"]') and say whether every day of the trip is still there, each with stops."""
+    if isinstance(final, dict) and "days" not in final and isinstance(final.get("properties"), dict):
+        # a smaller model answers in the shape of the schema: {"properties": {"title": {"type": "string",
+        # "description": "Paris ..."}, "days": [...]}} (seen with Nemotron 3.5 Lightning, 26.10): unwrap it
+        props = final.pop("properties")
+        final.clear()
+        final.update({k: v.get("description") if isinstance(v, dict) and "type" in v else v for k, v in props.items()})
     if not isinstance(final, dict) or not isinstance(final.get("days"), list):
         return False
     final["days"] = [d for d in final["days"] if isinstance(d, dict) and isinstance(d.get("stops"), list)][:days]

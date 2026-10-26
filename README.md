@@ -52,7 +52,7 @@ OpenStreetMap adds halal-tagged restaurants and more mosques; AlAdhan gives pray
 
 ```mermaid
 flowchart LR
-    U["Traveller: where, who, what they love"] --> A["LLM agent<br/>NVIDIA Nemotron 3 Super"]
+    U["Traveller: where, who, what they love"] --> A["LLM agent<br/>NVIDIA Nemotron 3 Ultra"]
     A -- "taste_entities" --> Q1["Qloo /search<br/>names → taste signals"]
     A -- "taste_places" --> Q2["Qloo /v2/insights<br/>signals + audiences Islam, families"]
     A -- "halal_food_near" --> H["Qloo halal restaurants<br/>+ OpenStreetMap halal tags"]
@@ -64,7 +64,7 @@ flowchart LR
     E --> R["Day-by-day plan on a map,<br/>and a companion on the day"]
 ```
 
-An LLM agent (NVIDIA Nemotron 3 Super, fallback Groq) researches with tools, then writes the itinerary:
+An LLM agent (NVIDIA Nemotron 3 Ultra; fallbacks Nemotron 3.5 Lightning and Groq) researches with tools, then writes the itinerary:
 
 1. `taste_entities` — turns everything you named into Qloo entities (only names you actually wrote; topics such as
    "dinosaurs" or "calligraphy" are matched against what places are known for)
